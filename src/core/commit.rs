@@ -20,13 +20,28 @@ pub struct CommitEntry {
 #[derive(Debug)]
 pub struct CommitOutcome {
     pub status: ExitStatus,
+    pub summary_line: Option<String>,
     pub recent_commits: Vec<CommitEntry>,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 pub fn run(options: &CommitOptions) -> io::Result<CommitOutcome> {
-    let status = Command::new("git")
+    let output = Command::new("git")
         .args(build_git_commit_args(options))
-        .status()?;
+        .output()?;
+
+    let status = output.status;
+    let stdout =
+        String::from_utf8(output.stdout).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    let stderr =
+        String::from_utf8(output.stderr).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+
+    let summary_line = if status.success() {
+        extract_commit_summary_line(&stdout)
+    } else {
+        None
+    };
 
     let recent_commits = if status.success() {
         load_recent_commits(RECENT_COMMITS_LIMIT).unwrap_or_default()
@@ -36,7 +51,10 @@ pub fn run(options: &CommitOptions) -> io::Result<CommitOutcome> {
 
     Ok(CommitOutcome {
         status,
+        summary_line,
         recent_commits,
+        stdout,
+        stderr,
     })
 }
 
@@ -97,9 +115,30 @@ fn parse_git_log_output(stdout: &str) -> Vec<CommitEntry> {
         .collect()
 }
 
+fn extract_commit_summary_line(stdout: &str) -> Option<String> {
+    stdout.lines().find_map(|line| {
+        let trimmed = line.trim();
+
+        if trimmed.contains(" file changed")
+            || trimmed.contains(" files changed")
+            || trimmed.contains(" insertion(+)")
+            || trimmed.contains(" insertions(+)")
+            || trimmed.contains(" deletion(-)")
+            || trimmed.contains(" deletions(-)")
+        {
+            Some(trimmed.to_string())
+        } else {
+            None
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_git_commit_args, parse_git_log_output, CommitEntry, CommitOptions};
+    use super::{
+        build_git_commit_args, extract_commit_summary_line, parse_git_log_output, CommitEntry,
+        CommitOptions,
+    };
 
     #[test]
     fn builds_commit_command_with_supported_passthrough_flags() {
@@ -148,6 +187,16 @@ mod tests {
                     title: "second commit".into(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn extracts_commit_summary_line_from_git_commit_output() {
+        let stdout = "[main abc1234] feat: sample\n 10 files changed, 2245 insertions(+)\n create mode 100644 src/main.rs\n";
+
+        assert_eq!(
+            extract_commit_summary_line(stdout),
+            Some("10 files changed, 2245 insertions(+)".into())
         );
     }
 }
