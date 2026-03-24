@@ -365,6 +365,9 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "ratatui",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -1512,6 +1515,7 @@ dependencies = [
  "atomic",
  "getrandom 0.4.2",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 
