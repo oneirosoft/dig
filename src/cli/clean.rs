@@ -161,6 +161,10 @@ fn execute_with_animation(plan: &CleanPlan) -> io::Result<crate::core::clean::Cl
                 previous_branch, plan.trunk_branch
             );
         }
+
+        if let Some(restored_branch) = &outcome.restored_original_branch {
+            println!("Returned to '{}' after cleanup.", restored_branch);
+        }
     } else {
         terminal.finish(&animation.render_active())?;
 
@@ -184,6 +188,10 @@ fn execute_without_animation(plan: &CleanPlan) -> io::Result<crate::core::clean:
                 "Switched from '{}' to '{}' before cleanup.",
                 previous_branch, plan.trunk_branch
             );
+        }
+
+        if let Some(restored_branch) = outcome.restored_original_branch.as_ref() {
+            println!("Returned to '{}' after cleanup.", restored_branch);
         }
 
         if !outcome.restacked_branches.is_empty() {

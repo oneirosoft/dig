@@ -76,6 +76,7 @@ pub enum CleanBlockReason {
 pub struct CleanApplyOutcome {
     pub status: ExitStatus,
     pub switched_to_trunk_from: Option<String>,
+    pub restored_original_branch: Option<String>,
     pub deleted_branches: Vec<String>,
     pub restacked_branches: Vec<RestackPreview>,
     pub failure_output: Option<String>,
@@ -135,6 +136,7 @@ where
         return Ok(CleanApplyOutcome {
             status: git::success_status()?,
             switched_to_trunk_from: None,
+            restored_original_branch: None,
             deleted_branches: Vec::new(),
             restacked_branches: Vec::new(),
             failure_output: None,
@@ -150,6 +152,7 @@ where
         .ok_or_else(|| io::Error::other("dig is not initialized; run 'dig init' first"))?;
     let mut state = load_state(&store_paths)?;
     let current_branch = git::current_branch_name()?;
+    let original_branch = current_branch.clone();
 
     let mut switched_to_trunk_from = None;
     if plan.targets_current_branch() && current_branch != config.trunk_branch {
@@ -162,6 +165,7 @@ where
             return Ok(CleanApplyOutcome {
                 status,
                 switched_to_trunk_from: None,
+                restored_original_branch: None,
                 deleted_branches: Vec::new(),
                 restacked_branches: Vec::new(),
                 failure_output: None,
@@ -216,6 +220,7 @@ where
                 return Ok(CleanApplyOutcome {
                     status: outcome.status,
                     switched_to_trunk_from,
+                    restored_original_branch: None,
                     deleted_branches,
                     restacked_branches,
                     failure_output: Some(outcome.stderr),
@@ -258,6 +263,7 @@ where
             return Ok(CleanApplyOutcome {
                 status,
                 switched_to_trunk_from,
+                restored_original_branch: None,
                 deleted_branches,
                 restacked_branches,
                 failure_output: None,
@@ -285,9 +291,31 @@ where
         last_status = status;
     }
 
+    let mut restored_original_branch = None;
+    if git::branch_exists(&original_branch)? {
+        let current_branch = git::current_branch_name_if_any()?;
+        if current_branch.as_deref() != Some(original_branch.as_str()) {
+            let status = git::switch_branch(&original_branch)?;
+            if !status.success() {
+                return Ok(CleanApplyOutcome {
+                    status,
+                    switched_to_trunk_from,
+                    restored_original_branch: None,
+                    deleted_branches,
+                    restacked_branches,
+                    failure_output: None,
+                });
+            }
+
+            restored_original_branch = Some(original_branch);
+            last_status = status;
+        }
+    }
+
     Ok(CleanApplyOutcome {
         status: last_status,
         switched_to_trunk_from,
+        restored_original_branch,
         deleted_branches,
         restacked_branches,
         failure_output: None,
@@ -639,6 +667,7 @@ mod tests {
 
             assert!(outcome.status.success());
             assert_eq!(outcome.switched_to_trunk_from.as_deref(), Some("feat/auth"));
+            assert_eq!(outcome.restored_original_branch, None);
             assert_eq!(outcome.deleted_branches, vec!["feat/auth".to_string()]);
             assert_eq!(
                 outcome
@@ -676,6 +705,33 @@ mod tests {
                     .iter()
                     .any(|node| node.branch_name == "feat/auth" && node.archived)
             );
+        });
+    }
+
+    #[test]
+    fn returns_to_original_branch_after_cleaning_from_another_checkout() {
+        with_temp_repo(|repo| {
+            initialize_main_repo(repo);
+            create_tracked_branch("feat/auth");
+            commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+            create_tracked_branch("feat/auth-api");
+            commit_file(repo, "auth-api.txt", "api\n", "feat: auth api");
+
+            squash_merge_branch_with_commit_listing(repo, "main", "feat/auth", "feat: merge auth");
+            git_ok(repo, &["checkout", "main"]);
+
+            let plan = plan(&CleanOptions {
+                branch_name: Some("feat/auth".into()),
+            })
+            .unwrap();
+
+            let outcome = apply(&plan).unwrap();
+
+            assert!(outcome.status.success());
+            assert_eq!(outcome.switched_to_trunk_from, None);
+            assert_eq!(outcome.restored_original_branch.as_deref(), Some("main"));
+            assert_eq!(git::current_branch_name().unwrap(), "main");
+            assert!(!git::branch_exists("feat/auth").unwrap());
         });
     }
 
