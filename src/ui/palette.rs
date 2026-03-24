@@ -1,6 +1,7 @@
 use ratatui::style::Color;
 
 pub const ANSI_RESET: &str = "\x1b[0m";
+pub const ANSI_STRIKETHROUGH: &str = "\x1b[9m";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Accent {
@@ -8,6 +9,9 @@ pub enum Accent {
     BranchRef,
     CommitHash,
     TagRef,
+    InFlight,
+    Success,
+    Failure,
 }
 
 impl Accent {
@@ -17,6 +21,9 @@ impl Accent {
             Self::BranchRef => "\x1b[32m",
             Self::CommitHash => "\x1b[33m",
             Self::TagRef => "\x1b[33m",
+            Self::InFlight => "\x1b[34m",
+            Self::Success => "\x1b[32m",
+            Self::Failure => "\x1b[31m",
         }
     }
 
@@ -28,11 +35,18 @@ impl Accent {
             Self::BranchRef => Color::Green,
             Self::CommitHash => Color::Yellow,
             Self::TagRef => Color::Yellow,
+            Self::InFlight => Color::Blue,
+            Self::Success => Color::Green,
+            Self::Failure => Color::Red,
         }
     }
 
     pub fn paint_ansi(self, text: &str) -> String {
         format!("{}{}{}", self.ansi(), text, ANSI_RESET)
+    }
+
+    pub fn paint_struck_ansi(self, text: &str) -> String {
+        format!("{}{}{}{}", self.ansi(), ANSI_STRIKETHROUGH, text, ANSI_RESET)
     }
 }
 
@@ -46,6 +60,11 @@ mod tests {
         assert_eq!(Accent::HeadMarker.ansi(), "\x1b[34m");
         assert_eq!(Accent::BranchRef.ansi(), "\x1b[32m");
         assert_eq!(Accent::CommitHash.ansi(), "\x1b[33m");
+        assert_eq!(Accent::Failure.ansi(), "\x1b[31m");
         assert_eq!(Accent::TagRef.tui(), Color::Yellow);
+        assert_eq!(
+            Accent::Failure.paint_struck_ansi("branch"),
+            "\u{1b}[31m\u{1b}[9mbranch\u{1b}[0m"
+        );
     }
 }

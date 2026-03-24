@@ -1,4 +1,5 @@
 mod branch;
+mod clean;
 mod init;
 mod commit;
 mod tree;
@@ -22,6 +23,9 @@ enum Commands {
     /// Create a new branch from the currently checked out branch and track it in dig
     Branch(branch::BranchArgs),
 
+    /// Clean merged tracked branches and restack their descendants
+    Clean(clean::CleanArgs),
+
     /// Initialize the current directory as a git repository
     Init(init::InitArgs),
 
@@ -39,6 +43,7 @@ pub fn run() -> ExitCode {
 
     let result = match cli.command {
         Commands::Branch(args) => branch::execute(args),
+        Commands::Clean(args) => clean::execute(args),
         Commands::Init(args) => init::execute(args),
         Commands::Commit(args) => commit::execute(args),
     };

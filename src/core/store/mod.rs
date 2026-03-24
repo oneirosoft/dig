@@ -11,5 +11,6 @@ pub(crate) use events::append_event;
 pub(crate) use fs::dig_paths;
 pub(crate) use state::{load_state, save_state};
 pub(crate) use types::{
-    now_unix_timestamp_secs, BranchCreatedEvent, BranchNode, DigConfig, DigEvent, ParentRef,
+    now_unix_timestamp_secs, BranchArchiveReason, BranchArchivedEvent, BranchCreatedEvent,
+    BranchNode, BranchReparentedEvent, DigConfig, DigEvent, ParentRef,
 };
