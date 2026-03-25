@@ -11,18 +11,14 @@ use crate::core::store::{
 use crate::core::workflow::{self, RestackExecutionEvent};
 
 use super::types::{
-    DeleteMergedBranchOutcome, MergeEvent, MergeMode, MergeOutcome, MergePlan,
-    MergeResumeOutcome,
+    DeleteMergedBranchOutcome, MergeEvent, MergeMode, MergeOutcome, MergePlan, MergeResumeOutcome,
 };
 
 pub(crate) fn apply(plan: &MergePlan) -> io::Result<MergeOutcome> {
     apply_with_reporter(plan, &mut |_| Ok(()))
 }
 
-pub(crate) fn apply_with_reporter<F>(
-    plan: &MergePlan,
-    reporter: &mut F,
-) -> io::Result<MergeOutcome>
+pub(crate) fn apply_with_reporter<F>(plan: &MergePlan, reporter: &mut F) -> io::Result<MergeOutcome>
 where
     F: FnMut(MergeEvent) -> io::Result<()>,
 {
@@ -126,12 +122,10 @@ where
                     total_commits: progress.total,
                 })
             }
-            RestackExecutionEvent::Completed(action) => {
-                reporter(MergeEvent::RebaseCompleted {
-                    branch_name: action.branch_name.clone(),
-                    onto_branch: action.new_base_branch_name.clone(),
-                })
-            }
+            RestackExecutionEvent::Completed(action) => reporter(MergeEvent::RebaseCompleted {
+                branch_name: action.branch_name.clone(),
+                onto_branch: action.new_base_branch_name.clone(),
+            }),
         },
     )?;
     if restack_outcome.paused {

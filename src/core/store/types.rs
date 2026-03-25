@@ -99,7 +99,6 @@ impl DigState {
 
         Ok((old_parent, old_base_ref))
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,6 +164,7 @@ pub enum PendingOperationKind {
     Adopt(PendingAdoptOperation),
     Merge(PendingMergeOperation),
     Clean(PendingCleanOperation),
+    Orphan(PendingOrphanOperation),
 }
 
 impl PendingOperationKind {
@@ -174,6 +174,7 @@ impl PendingOperationKind {
             Self::Adopt(_) => "adopt",
             Self::Merge(_) => "merge",
             Self::Clean(_) => "clean",
+            Self::Orphan(_) => "orphan",
         }
     }
 }
@@ -211,6 +212,14 @@ pub struct PendingCleanOperation {
     pub remaining_branch_names: Vec<String>,
     pub deleted_branches: Vec<String>,
     pub restacked_branches: Vec<RestackPreview>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingOrphanOperation {
+    pub original_branch: String,
+    pub branch_name: String,
+    pub parent_branch_name: String,
+    pub node_id: Uuid,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -265,6 +274,7 @@ pub struct BranchAdoptedEvent {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BranchArchiveReason {
     IntegratedIntoParent { parent_branch: String },
+    Orphaned,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -298,7 +308,7 @@ mod tests {
     use super::{
         BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchNode, DigConfig,
         DigEvent, DigState, ParentRef, PendingCommitOperation, PendingOperationKind,
-        PendingOperationState,
+        PendingOperationState, PendingOrphanOperation,
     };
     use crate::core::restack::RestackAction;
     use uuid::Uuid;
@@ -342,6 +352,21 @@ mod tests {
 
         assert!(serialized.contains("\"type\":\"branch_archived\""));
         assert!(serialized.contains("\"kind\":\"integrated_into_parent\""));
+    }
+
+    #[test]
+    fn serializes_orphaned_branch_archive_event() {
+        let event = DigEvent::BranchArchived(BranchArchivedEvent {
+            occurred_at_unix_secs: 1,
+            branch_id: Uuid::nil(),
+            branch_name: "feature/api".into(),
+            reason: BranchArchiveReason::Orphaned,
+        });
+
+        let serialized = serde_json::to_string(&event).unwrap();
+
+        assert!(serialized.contains("\"type\":\"branch_archived\""));
+        assert!(serialized.contains("\"kind\":\"orphaned\""));
     }
 
     #[test]
@@ -406,5 +431,17 @@ mod tests {
         let (_, operation) = operation.advance_after_success();
 
         assert!(operation.is_none());
+    }
+
+    #[test]
+    fn reports_orphan_operation_command_name() {
+        let operation = PendingOperationKind::Orphan(PendingOrphanOperation {
+            original_branch: "feature/api".into(),
+            branch_name: "feature/api".into(),
+            parent_branch_name: "main".into(),
+            node_id: Uuid::nil(),
+        });
+
+        assert_eq!(operation.command_name(), "orphan");
     }
 }

@@ -13,8 +13,7 @@ pub(crate) use config::load_config;
 pub(crate) use events::append_event;
 pub(crate) use fs::dig_paths;
 pub(crate) use mutations::{
-    record_branch_adopted, record_branch_archived, record_branch_created,
-    record_branch_reparented,
+    record_branch_adopted, record_branch_archived, record_branch_created, record_branch_reparented,
 };
 pub(crate) use operation::{clear_operation, load_operation, save_operation};
 pub(crate) use session::{StoreSession, open_initialized, open_or_initialize};
@@ -22,6 +21,6 @@ pub(crate) use state::{load_state, save_state};
 pub(crate) use types::{
     BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchCreatedEvent, BranchNode,
     BranchReparentedEvent, DigConfig, DigEvent, ParentRef, PendingAdoptOperation,
-    PendingCleanOperation, PendingCommitEntry, PendingCommitOperation,
-    PendingMergeOperation, PendingOperationKind, PendingOperationState, now_unix_timestamp_secs,
+    PendingCleanOperation, PendingCommitEntry, PendingCommitOperation, PendingMergeOperation,
+    PendingOperationKind, PendingOperationState, PendingOrphanOperation, now_unix_timestamp_secs,
 };

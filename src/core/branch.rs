@@ -3,8 +3,8 @@ use std::process::ExitStatus;
 
 use uuid::Uuid;
 
-use crate::core::graph::BranchGraph;
 use crate::core::git;
+use crate::core::graph::BranchGraph;
 use crate::core::store::types::DigState;
 use crate::core::store::{
     BranchNode, DigConfig, ParentRef, now_unix_timestamp_secs, open_or_initialize,

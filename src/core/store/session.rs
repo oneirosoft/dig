@@ -2,9 +2,7 @@ use std::io;
 
 use crate::core::git::{self, RepoContext};
 
-use super::{
-    DigConfig, StoreInitialization, dig_paths, initialize_store, load_config, load_state,
-};
+use super::{DigConfig, StoreInitialization, dig_paths, initialize_store, load_config, load_state};
 use crate::core::store::fs::DigPaths;
 use crate::core::store::types::DigState;
 

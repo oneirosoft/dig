@@ -61,8 +61,7 @@ fn detects_squash_commit_message_that_mentions_branch_commits() {
             },
             CommitMetadata {
                 sha: "1de9e06d1174402332fdd5343a387249b0a5ef66".into(),
-                subject: "feat: new parent flag to specify the parent mannualy of a branch"
-                    .into(),
+                subject: "feat: new parent flag to specify the parent mannualy of a branch".into(),
                 body: String::new(),
             },
         ]
@@ -75,11 +74,21 @@ fn cleans_squash_merged_parent_and_restacks_descendants() {
         initialize_main_repo(repo);
         create_tracked_branch("feat/auth");
         commit_file(repo, "auth.txt", "auth\n", "feat: auth");
-        append_file(repo, "auth.txt", "auth second line\n", "feat: auth follow-up");
+        append_file(
+            repo,
+            "auth.txt",
+            "auth second line\n",
+            "feat: auth follow-up",
+        );
         create_tracked_branch("feat/auth-api");
         commit_file(repo, "auth-api.txt", "api\n", "feat: auth api");
         create_tracked_branch("feat/auth-api-tests");
-        commit_file(repo, "auth-api-tests.txt", "tests\n", "feat: auth api tests");
+        commit_file(
+            repo,
+            "auth-api-tests.txt",
+            "tests\n",
+            "feat: auth api tests",
+        );
 
         squash_merge_branch_with_commit_listing(repo, "main", "feat/auth", "feat: merge auth");
         git_ok(repo, &["checkout", "feat/auth"]);

@@ -107,10 +107,9 @@ impl<'a> BranchGraph<'a> {
     }
 
     pub fn subtree(&self, node_id: Uuid) -> io::Result<BranchTreeNode> {
-        let node = self
-            .state
-            .find_branch_by_id(node_id)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "tracked branch was not found"))?;
+        let node = self.state.find_branch_by_id(node_id).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "tracked branch was not found")
+        })?;
 
         let mut children = Vec::new();
         for child_id in self.active_children_ids(node_id) {

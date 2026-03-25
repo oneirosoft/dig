@@ -316,7 +316,8 @@ fn maybe_restack_after_commit_inner(
         return Ok(PostCommitRestackOutcome::default());
     };
 
-    let actions = restack::plan_after_branch_advance(&state, node.id, &node.branch_name, old_head_oid)?;
+    let actions =
+        restack::plan_after_branch_advance(&state, node.id, &node.branch_name, old_head_oid)?;
     let mut session = StoreSession {
         repo: context.repo.clone(),
         paths: store_paths,
@@ -335,7 +336,10 @@ fn maybe_restack_after_commit_inner(
     ) {
         Ok(outcome) => outcome,
         Err(err) => {
-            return Ok(PostCommitRestackOutcome::failure(Vec::new(), err.to_string()));
+            return Ok(PostCommitRestackOutcome::failure(
+                Vec::new(),
+                err.to_string(),
+            ));
         }
     };
 

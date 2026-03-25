@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
 use std::fs;
-use std::path::Path;
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
 use serde_json::Value;
@@ -157,6 +157,24 @@ pub fn find_node<'a>(state: &'a Value, branch_name: &str) -> Option<&'a Value> {
                 && node["archived"].as_bool() == Some(false)
         })
     })
+}
+
+pub fn find_archived_node<'a>(state: &'a Value, branch_name: &str) -> Option<&'a Value> {
+    state["nodes"].as_array().and_then(|nodes| {
+        nodes.iter().find(|node| {
+            node["branch_name"].as_str() == Some(branch_name)
+                && node["archived"].as_bool() == Some(true)
+        })
+    })
+}
+
+pub fn load_events_json(repo: &Path) -> Vec<Value> {
+    fs::read_to_string(repo.join(".git/dig/events.ndjson"))
+        .unwrap()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
 }
 
 pub fn events_contain_type(repo: &Path, event_type: &str) -> bool {

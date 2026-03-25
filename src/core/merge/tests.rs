@@ -1,4 +1,3 @@
-use std::fs;
 use super::apply::build_squash_commit_message;
 use super::plan::plan as build_plan;
 use super::{MergeMode, MergeOptions, delete_merged_branch};
@@ -8,6 +7,7 @@ use crate::core::test_support::{
     append_file, commit_file, create_tracked_branch, git_ok, git_output, initialize_main_repo,
     with_temp_repo,
 };
+use std::fs;
 
 #[test]
 fn builds_default_squash_commit_message_with_commit_listing() {
@@ -74,7 +74,12 @@ fn merges_child_into_parent_and_restacks_descendants() {
         create_tracked_branch("feat/auth-api");
         commit_file(repo, "auth-api.txt", "api\n", "feat: auth api");
         create_tracked_branch("feat/auth-api-tests");
-        commit_file(repo, "auth-api-tests.txt", "tests\n", "feat: auth api tests");
+        commit_file(
+            repo,
+            "auth-api-tests.txt",
+            "tests\n",
+            "feat: auth api tests",
+        );
 
         git_ok(repo, &["checkout", "feat/auth-api"]);
 
@@ -124,7 +129,12 @@ fn squash_merges_into_trunk_and_keeps_branch_when_delete_is_declined() {
         initialize_main_repo(repo);
         create_tracked_branch("feat/auth");
         commit_file(repo, "auth.txt", "auth\n", "feat: auth");
-        append_file(repo, "auth.txt", "auth second line\n", "feat: auth follow-up");
+        append_file(
+            repo,
+            "auth.txt",
+            "auth second line\n",
+            "feat: auth follow-up",
+        );
         create_tracked_branch("feat/auth-api");
         commit_file(repo, "auth-api.txt", "api\n", "feat: auth api");
 
@@ -140,7 +150,10 @@ fn squash_merges_into_trunk_and_keeps_branch_when_delete_is_declined() {
         let outcome = super::apply(&merge_plan).unwrap();
 
         assert!(outcome.status.success());
-        assert_eq!(outcome.switched_to_target_from.as_deref(), Some("feat/auth"));
+        assert_eq!(
+            outcome.switched_to_target_from.as_deref(),
+            Some("feat/auth")
+        );
         assert_eq!(
             outcome
                 .restacked_branches

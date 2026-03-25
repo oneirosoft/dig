@@ -1,8 +1,8 @@
 use std::io;
 use std::process::ExitStatus;
 
-use crate::core::{adopt, clean, commit, git, merge};
 use crate::core::store::{clear_operation, load_operation, open_initialized};
+use crate::core::{adopt, clean, commit, git, merge, orphan};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SyncOptions {
@@ -18,6 +18,7 @@ pub enum SyncCompletion {
         trunk_branch: String,
         outcome: clean::CleanApplyOutcome,
     },
+    Orphan(orphan::OrphanOutcome),
 }
 
 #[derive(Debug)]
@@ -107,6 +108,18 @@ pub fn run(options: &SyncOptions) -> io::Result<SyncOutcome> {
                     trunk_branch,
                     outcome,
                 }),
+                failure_output,
+                paused,
+            })
+        }
+        crate::core::store::PendingOperationKind::Orphan(payload) => {
+            let outcome = orphan::resume_after_sync(pending_operation, payload)?;
+            let status = outcome.status;
+            let failure_output = outcome.failure_output.clone();
+            let paused = outcome.paused;
+            Ok(SyncOutcome {
+                status,
+                completion: Some(SyncCompletion::Orphan(outcome)),
                 failure_output,
                 paused,
             })

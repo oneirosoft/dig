@@ -4,11 +4,11 @@ use std::process::ExitStatus;
 use crate::core::git::{self, RebaseProgress, RepoContext};
 use crate::core::restack::{self, RestackAction, RestackPreview};
 use crate::core::store::fs::DigPaths;
+use crate::core::store::session::StoreSession;
 use crate::core::store::{
     PendingOperationKind, PendingOperationState, clear_operation, load_operation,
     record_branch_reparented, save_operation,
 };
-use crate::core::store::session::StoreSession;
 
 #[derive(Debug)]
 pub(crate) struct CheckoutBranchOutcome {
@@ -40,18 +40,12 @@ pub(crate) enum RestackExecutionEvent<'a> {
     Completed(&'a RestackAction),
 }
 
-pub(crate) fn ensure_ready_for_operation(
-    repo: &RepoContext,
-    command_name: &str,
-) -> io::Result<()> {
+pub(crate) fn ensure_ready_for_operation(repo: &RepoContext, command_name: &str) -> io::Result<()> {
     git::ensure_clean_worktree(command_name)?;
     git::ensure_no_in_progress_operations(repo, command_name)
 }
 
-pub(crate) fn ensure_no_pending_operation(
-    paths: &DigPaths,
-    command_name: &str,
-) -> io::Result<()> {
+pub(crate) fn ensure_no_pending_operation(paths: &DigPaths, command_name: &str) -> io::Result<()> {
     let Some(operation) = load_operation(paths)? else {
         return Ok(());
     };
@@ -287,11 +281,20 @@ mod tests {
             assert!(outcome.paused);
             assert!(!outcome.status.success());
             assert!(outcome.restacked_branches.is_empty());
-            assert!(outcome.failure_output.as_deref().unwrap().contains("could not apply"));
+            assert!(
+                outcome
+                    .failure_output
+                    .as_deref()
+                    .unwrap()
+                    .contains("could not apply")
+            );
 
             let pending_operation = load_operation(&paths).unwrap().unwrap();
             assert_eq!(pending_operation.origin.command_name(), "commit");
-            assert_eq!(pending_operation.active_action().branch_name, "feat/auth-ui");
+            assert_eq!(
+                pending_operation.active_action().branch_name,
+                "feat/auth-ui"
+            );
             assert_eq!(
                 fs::read_to_string(repo.join(".git/dig/state.json")).unwrap(),
                 state_before

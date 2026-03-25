@@ -1,8 +1,8 @@
 use std::io;
 use std::process::ExitStatus;
 
-use crate::core::graph::BranchGraph;
 use crate::core::git;
+use crate::core::graph::BranchGraph;
 use crate::core::store::{StoreInitialization, open_or_initialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

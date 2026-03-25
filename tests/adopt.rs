@@ -2,9 +2,8 @@ mod support;
 
 use support::{
     active_rebase_head_name, commit_file, dig, dig_ok, events_contain_type, find_node, git_ok,
-    git_stdout,
-    initialize_main_repo, load_operation_json, load_state_json, overwrite_file, strip_ansi,
-    with_temp_repo,
+    git_stdout, initialize_main_repo, load_operation_json, load_state_json, overwrite_file,
+    strip_ansi, with_temp_repo,
 };
 
 #[test]

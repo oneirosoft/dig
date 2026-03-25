@@ -4,8 +4,8 @@ use std::process::ExitStatus;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::core::graph::BranchGraph;
 use crate::core::git::{self, RebaseProgress};
+use crate::core::graph::BranchGraph;
 use crate::core::store::ParentRef;
 use crate::core::store::types::DigState;
 
@@ -359,5 +359,4 @@ mod tests {
             assert_eq!(planned[1].new_parent, None);
         });
     }
-
 }

@@ -37,22 +37,22 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
                 }
             }
             SyncCompletion::Merge(merge_outcome) if merge_outcome.outcome.status.success() => {
-                let deleted_branch_name =
-                    if super::merge::confirm_delete_merged_branch(&merge_outcome.source_branch_name)?
-                    {
-                        let delete_outcome = merge::delete_merged_branch_by_id(
-                            merge_outcome.source_node_id,
-                            &merge_outcome.target_branch_name,
-                        )?;
-                        if !delete_outcome.status.success() {
-                            return Ok(CommandOutcome {
-                                status: delete_outcome.status,
-                            });
-                        }
-                        delete_outcome.deleted_branch_name
-                    } else {
-                        None
-                    };
+                let deleted_branch_name = if super::merge::confirm_delete_merged_branch(
+                    &merge_outcome.source_branch_name,
+                )? {
+                    let delete_outcome = merge::delete_merged_branch_by_id(
+                        merge_outcome.source_node_id,
+                        &merge_outcome.target_branch_name,
+                    )?;
+                    if !delete_outcome.status.success() {
+                        return Ok(CommandOutcome {
+                            status: delete_outcome.status,
+                        });
+                    }
+                    delete_outcome.deleted_branch_name
+                } else {
+                    None
+                };
 
                 let rendered_tree = super::merge::load_relative_tree(
                     &merge_outcome.target_branch_name,
@@ -74,6 +74,15 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
                 outcome: clean_outcome,
             } if clean_outcome.status.success() => {
                 let output = super::clean::format_clean_success_output(trunk_branch, clean_outcome);
+                if !output.is_empty() {
+                    println!("{output}");
+                }
+            }
+            SyncCompletion::Orphan(orphan_outcome) if orphan_outcome.status.success() => {
+                let view = tree::focused_context_view(&orphan_outcome.parent_branch_name)?;
+                let rendered_tree = super::tree::render_stack_tree(&view);
+                let output =
+                    super::orphan::format_orphan_success_output(orphan_outcome, &rendered_tree);
                 if !output.is_empty() {
                     println!("{output}");
                 }

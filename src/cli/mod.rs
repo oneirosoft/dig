@@ -1,11 +1,12 @@
 mod adopt;
 mod branch;
 mod clean;
-mod common;
 mod commit;
+mod common;
 mod init;
 mod merge;
 mod operation;
+mod orphan;
 mod sync;
 mod tree;
 
@@ -43,6 +44,9 @@ enum Commands {
     /// Merge a tracked branch into its tracked base and restack descendants
     Merge(merge::MergeArgs),
 
+    /// Stop tracking a branch in dig while keeping the local branch
+    Orphan(orphan::OrphanArgs),
+
     /// Continue a paused restack sequence
     Sync(sync::SyncArgs),
 
@@ -65,6 +69,7 @@ pub fn run() -> ExitCode {
         Commands::Init(args) => init::execute(args),
         Commands::Commit(args) => commit::execute(args),
         Commands::Merge(args) => merge::execute(args),
+        Commands::Orphan(args) => orphan::execute(args),
         Commands::Sync(args) => sync::execute(args),
         Commands::Tree(args) => tree::execute(args),
     };

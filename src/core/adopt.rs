@@ -7,9 +7,8 @@ use crate::core::branch;
 use crate::core::git;
 use crate::core::restack::RestackAction;
 use crate::core::store::{
-    BranchNode, ParentRef, PendingAdoptOperation, PendingOperationKind,
-    PendingOperationState, now_unix_timestamp_secs, open_initialized, open_or_initialize,
-    record_branch_adopted,
+    BranchNode, ParentRef, PendingAdoptOperation, PendingOperationKind, PendingOperationState,
+    now_unix_timestamp_secs, open_initialized, open_or_initialize, record_branch_adopted,
 };
 use crate::core::workflow;
 
@@ -57,7 +56,10 @@ pub fn plan(options: &AdoptOptions) -> io::Result<AdoptPlan> {
     if branch_name == session.config.trunk_branch {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("cannot adopt trunk branch '{}'", session.config.trunk_branch),
+            format!(
+                "cannot adopt trunk branch '{}'",
+                session.config.trunk_branch
+            ),
         ));
     }
 
@@ -109,18 +111,19 @@ pub fn apply(plan: &AdoptPlan) -> io::Result<AdoptOutcome> {
     workflow::ensure_ready_for_operation(&session.repo, "adopt")?;
     workflow::ensure_no_pending_operation(&session.paths, "adopt")?;
 
-    if session.state.find_branch_by_name(&plan.branch_name).is_some() {
+    if session
+        .state
+        .find_branch_by_name(&plan.branch_name)
+        .is_some()
+    {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             format!("branch '{}' is already tracked by dig", plan.branch_name),
         ));
     }
 
-    let resolved_parent = branch::resolve_parent_ref(
-        &session.state,
-        &session.config,
-        &plan.parent_branch_name,
-    )?;
+    let resolved_parent =
+        branch::resolve_parent_ref(&session.state, &session.config, &plan.parent_branch_name)?;
     if resolved_parent != plan.parent {
         return Err(io::Error::other(format!(
             "tracked parent for '{}' changed while planning adopt",

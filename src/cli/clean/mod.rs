@@ -216,7 +216,9 @@ pub(crate) fn format_clean_success_output(
         if !lines.is_empty() {
             lines.push(String::new());
         }
-        lines.push(common::format_restacked_branches(&outcome.restacked_branches));
+        lines.push(common::format_restacked_branches(
+            &outcome.restacked_branches,
+        ));
     }
 
     if !outcome.deleted_branches.is_empty() {

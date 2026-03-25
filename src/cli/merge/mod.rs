@@ -206,7 +206,9 @@ pub(crate) fn format_merge_resume_success_output(
 
     if !outcome.restacked_branches.is_empty() {
         summary_lines.push(String::new());
-        summary_lines.push(common::format_restacked_branches(&outcome.restacked_branches));
+        summary_lines.push(common::format_restacked_branches(
+            &outcome.restacked_branches,
+        ));
     }
 
     match deleted_branch_name {
