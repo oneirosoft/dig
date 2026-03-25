@@ -66,6 +66,28 @@ pub fn plan_after_branch_detach(
     Ok(actions)
 }
 
+pub fn plan_after_branch_advance(
+    state: &DigState,
+    advanced_node_id: Uuid,
+    advanced_branch_name: &str,
+    old_head_oid: &str,
+) -> io::Result<Vec<RestackAction>> {
+    let mut actions = Vec::new();
+
+    for child_id in state.active_children_ids(advanced_node_id) {
+        collect_branch_advance_actions(
+            state,
+            child_id,
+            advanced_branch_name,
+            old_head_oid,
+            advanced_branch_name,
+            &mut actions,
+        )?;
+    }
+
+    Ok(actions)
+}
+
 pub fn previews_for_actions(actions: &[RestackAction]) -> Vec<RestackPreview> {
     actions
         .iter()
@@ -131,6 +153,40 @@ where
     })
 }
 
+fn collect_branch_advance_actions(
+    state: &DigState,
+    node_id: Uuid,
+    old_upstream_branch_name: &str,
+    old_upstream_oid: &str,
+    new_base_branch_name: &str,
+    actions: &mut Vec<RestackAction>,
+) -> io::Result<()> {
+    let node = load_active_branch_node(state, node_id)?;
+    let branch_name = node.branch_name.clone();
+    actions.push(RestackAction {
+        node_id,
+        branch_name: branch_name.clone(),
+        old_upstream_branch_name: old_upstream_branch_name.to_string(),
+        old_upstream_oid: old_upstream_oid.to_string(),
+        new_base_branch_name: new_base_branch_name.to_string(),
+        new_parent: None,
+    });
+
+    for child_id in state.active_children_ids(node_id) {
+        let branch_head_oid = git::ref_oid(&branch_name)?;
+        collect_branch_advance_actions(
+            state,
+            child_id,
+            &branch_name,
+            &branch_head_oid,
+            &branch_name,
+            actions,
+        )?;
+    }
+
+    Ok(())
+}
+
 fn collect_restack_actions(
     state: &DigState,
     node_id: Uuid,
@@ -139,23 +195,7 @@ fn collect_restack_actions(
     new_parent: Option<ParentRef>,
     actions: &mut Vec<RestackAction>,
 ) -> io::Result<()> {
-    let node = state.find_branch_by_id(node_id).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "tracked descendant branch was not found",
-        )
-    })?;
-
-    if !git::branch_exists(&node.branch_name)? {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!(
-                "tracked descendant branch '{}' no longer exists locally",
-                node.branch_name
-            ),
-        ));
-    }
-
+    let node = load_active_branch_node(state, node_id)?;
     let old_upstream_oid = git::ref_oid(old_upstream_branch_name)?;
     let branch_name = node.branch_name.clone();
     actions.push(RestackAction {
@@ -174,10 +214,41 @@ fn collect_restack_actions(
     Ok(())
 }
 
+fn load_active_branch_node(
+    state: &DigState,
+    node_id: Uuid,
+) -> io::Result<crate::core::store::BranchNode> {
+    let node = state.find_branch_by_id(node_id).cloned().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "tracked descendant branch was not found",
+        )
+    })?;
+
+    if !git::branch_exists(&node.branch_name)? {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "tracked descendant branch '{}' no longer exists locally",
+                node.branch_name
+            ),
+        ));
+    }
+
+    Ok(node)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{RestackAction, previews_for_actions};
-    use crate::core::store::ParentRef;
+    use super::{RestackAction, plan_after_branch_advance, previews_for_actions};
+    use crate::core::git;
+    use crate::core::store::types::DIG_STATE_VERSION;
+    use crate::core::store::{BranchNode, ParentRef};
+    use std::env;
+    use std::fs;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::path::Path;
+    use std::process::Command;
     use uuid::Uuid;
 
     #[test]
@@ -207,5 +278,139 @@ mod tests {
         assert_eq!(previews[1].branch_name, "feat/auth-api-tests");
         assert_eq!(previews[1].onto_branch, "feat/auth-api");
         assert!(!previews[1].parent_changed);
+    }
+
+    #[test]
+    fn plans_restack_after_branch_advance_with_old_head_for_immediate_child() {
+        with_temp_repo(|repo| {
+            initialize_main_repo(repo);
+            git_ok(repo, &["checkout", "-b", "feat/auth"]);
+            commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+            git_ok(repo, &["checkout", "-b", "feat/auth-api"]);
+            commit_file(repo, "auth-api.txt", "api\n", "feat: auth api");
+            git_ok(repo, &["checkout", "-b", "feat/auth-api-tests"]);
+            commit_file(
+                repo,
+                "auth-api-tests.txt",
+                "tests\n",
+                "feat: auth api tests",
+            );
+
+            let parent_id = Uuid::new_v4();
+            let child_id = Uuid::new_v4();
+            let grandchild_id = Uuid::new_v4();
+            let state = crate::core::store::types::DigState {
+                version: DIG_STATE_VERSION,
+                nodes: vec![
+                    BranchNode {
+                        id: parent_id,
+                        branch_name: "feat/auth".into(),
+                        parent: ParentRef::Trunk,
+                        base_ref: "main".into(),
+                        fork_point_oid: "root".into(),
+                        head_oid_at_creation: "root".into(),
+                        created_at_unix_secs: 1,
+                        archived: false,
+                    },
+                    BranchNode {
+                        id: child_id,
+                        branch_name: "feat/auth-api".into(),
+                        parent: ParentRef::Branch { node_id: parent_id },
+                        base_ref: "feat/auth".into(),
+                        fork_point_oid: "auth".into(),
+                        head_oid_at_creation: "auth".into(),
+                        created_at_unix_secs: 2,
+                        archived: false,
+                    },
+                    BranchNode {
+                        id: grandchild_id,
+                        branch_name: "feat/auth-api-tests".into(),
+                        parent: ParentRef::Branch { node_id: child_id },
+                        base_ref: "feat/auth-api".into(),
+                        fork_point_oid: "api".into(),
+                        head_oid_at_creation: "api".into(),
+                        created_at_unix_secs: 3,
+                        archived: false,
+                    },
+                ],
+            };
+
+            let planned =
+                plan_after_branch_advance(&state, parent_id, "feat/auth", "old-parent-head-oid")
+                    .unwrap();
+
+            assert_eq!(planned.len(), 2);
+            assert_eq!(planned[0].node_id, child_id);
+            assert_eq!(planned[0].branch_name, "feat/auth-api");
+            assert_eq!(planned[0].old_upstream_branch_name, "feat/auth");
+            assert_eq!(planned[0].old_upstream_oid, "old-parent-head-oid");
+            assert_eq!(planned[0].new_base_branch_name, "feat/auth");
+            assert_eq!(planned[0].new_parent, None);
+
+            assert_eq!(planned[1].node_id, grandchild_id);
+            assert_eq!(planned[1].branch_name, "feat/auth-api-tests");
+            assert_eq!(planned[1].old_upstream_branch_name, "feat/auth-api");
+            assert_eq!(
+                planned[1].old_upstream_oid,
+                git::ref_oid("feat/auth-api").unwrap()
+            );
+            assert_eq!(planned[1].new_base_branch_name, "feat/auth-api");
+            assert_eq!(planned[1].new_parent, None);
+        });
+    }
+
+    fn with_temp_repo(test: impl FnOnce(&Path)) {
+        let guard = crate::core::test_cwd_lock().lock().unwrap();
+        let original_dir = env::current_dir().unwrap();
+        let repo_dir = env::temp_dir().join(format!("dig-restack-{}", Uuid::new_v4()));
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            env::set_current_dir(&repo_dir).unwrap();
+            test(&repo_dir);
+        }));
+
+        env::set_current_dir(original_dir).unwrap();
+        fs::remove_dir_all(&repo_dir).unwrap();
+        drop(guard);
+
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    fn initialize_main_repo(repo: &Path) {
+        git_ok(repo, &["init", "--quiet"]);
+        git_ok(repo, &["checkout", "-b", "main"]);
+        git_ok(repo, &["config", "user.name", "Dig Test"]);
+        git_ok(repo, &["config", "user.email", "dig@example.com"]);
+        git_ok(repo, &["config", "commit.gpgsign", "false"]);
+        commit_file(repo, "README.md", "root\n", "chore: init");
+    }
+
+    fn commit_file(repo: &Path, file_name: &str, contents: &str, message: &str) {
+        fs::write(repo.join(file_name), contents).unwrap();
+        git_ok(repo, &["add", file_name]);
+        git_ok(
+            repo,
+            &[
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--quiet",
+                "-m",
+                message,
+            ],
+        );
+    }
+
+    fn git_ok(repo: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(repo)
+            .args(args)
+            .status()
+            .unwrap();
+
+        assert!(status.success(), "git {:?} failed", args);
     }
 }

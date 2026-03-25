@@ -6,18 +6,10 @@ pub fn render_branch_lineage(lineage: &[String]) -> String {
     let mut lines = Vec::new();
 
     for (index, branch_name) in lineage.iter().enumerate() {
-        if index == 0 {
-            lines.push(format!(
-                "{} {}",
-                Accent::BranchRef.paint_ansi(markers::CURRENT_BRANCH),
-                Accent::BranchRef.paint_ansi(branch_name)
-            ));
-        } else {
-            lines.push(branch_name.clone());
-        }
+        lines.push(format_lineage_branch(branch_name, index == 0));
 
         if index + 1 < lineage.len() {
-            lines.push(markers::LINEAGE_PIPE.to_string());
+            lines.push(format!("{} ", markers::LINEAGE_PIPE));
         }
     }
 
@@ -77,6 +69,18 @@ fn format_branch_label(branch_name: &str, is_current: bool) -> String {
     }
 }
 
+fn format_lineage_branch(branch_name: &str, is_current: bool) -> String {
+    if is_current {
+        format!(
+            "{} {}",
+            Accent::BranchRef.paint_ansi(markers::CURRENT_BRANCH),
+            Accent::BranchRef.paint_ansi(branch_name)
+        )
+    } else {
+        format!("{}  {}", markers::NON_CURRENT_BRANCH, branch_name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{render_branch_lineage, render_stack_tree};
@@ -92,8 +96,21 @@ mod tests {
 
         assert_eq!(
             tree,
-            "\u{1b}[32m✓\u{1b}[0m \u{1b}[32mfeature/api-followup\u{1b}[0m\n│\nfeature/api\n│\nmain"
+            concat!(
+                "\u{1b}[32m✓\u{1b}[0m \u{1b}[32mfeature/api-followup\u{1b}[0m\n",
+                "│ \n",
+                "*  feature/api\n",
+                "│ \n",
+                "*  main"
+            )
         );
+    }
+
+    #[test]
+    fn renders_single_branch_lineage_without_connectors() {
+        let tree = render_branch_lineage(&["main".into()]);
+
+        assert_eq!(tree, "\u{1b}[32m✓\u{1b}[0m \u{1b}[32mmain\u{1b}[0m");
     }
 
     #[test]
