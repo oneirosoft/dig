@@ -201,7 +201,7 @@ pub(crate) fn plan_deleted_local_step_for_branch(
     plan_deleted_local_step(state, trunk_branch, node.id)
 }
 
-fn resolve_replacement_parent(
+pub(crate) fn resolve_replacement_parent(
     state: &DigState,
     trunk_branch: &str,
     parent: &ParentRef,
@@ -215,7 +215,7 @@ fn resolve_replacement_parent(
             }
             ParentRef::Branch { node_id } => {
                 let parent_node = state
-                    .find_branch_by_id(node_id)
+                    .find_any_branch_by_id(node_id)
                     .ok_or_else(|| io::Error::other("tracked parent branch was not found"))?;
 
                 if !parent_node.archived && git::branch_exists(&parent_node.branch_name)? {

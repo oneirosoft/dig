@@ -4,12 +4,12 @@ use std::process::ExitStatus;
 
 use crate::core::clean::{self, CleanOptions, CleanPlanMode};
 use crate::core::deleted_local;
-use crate::core::gh::{self, PullRequestState};
+use crate::core::gh::{self, PullRequestState, PullRequestStatus};
 use crate::core::graph::BranchGraph;
 use crate::core::restack::{self, RestackAction, RestackPreview};
 use crate::core::store::{
-    PendingOperationKind, PendingOperationState, PendingSyncOperation, PendingSyncPhase,
-    clear_operation, load_operation, open_initialized,
+    BranchNode, PendingOperationKind, PendingOperationState, PendingSyncOperation,
+    PendingSyncPhase, clear_operation, load_operation, open_initialized,
 };
 use crate::core::workflow;
 use crate::core::{adopt, commit, git, merge, orphan, reparent};
@@ -35,6 +35,7 @@ pub enum SyncCompletion {
 
 #[derive(Debug)]
 pub struct FullSyncOutcome {
+    pub repaired_pull_requests: Vec<PullRequestRepairOutcome>,
     pub deleted_branches: Vec<String>,
     pub restacked_branches: Vec<RestackPreview>,
     pub cleanup_plan: clean::CleanPlan,
@@ -75,6 +76,14 @@ pub struct RemotePushOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestRepairOutcome {
+    pub branch_name: String,
+    pub pull_request_number: u64,
+    pub old_base_branch_name: String,
+    pub new_base_branch_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullRequestUpdateAction {
     pub branch_name: String,
     pub pull_request_number: u64,
@@ -86,8 +95,25 @@ pub struct PullRequestUpdatePlan {
     pub actions: Vec<PullRequestUpdateAction>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingPullRequestRepair {
+    branch_name: String,
+    pull_request_number: u64,
+    old_base_branch_name: String,
+    new_base_branch_name: String,
+    was_draft: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParentPullRequestRepairPlan {
+    remote_target: git::BranchPushTarget,
+    restore_source_ref: String,
+    new_base_branch_name: String,
+}
+
 #[derive(Debug, Default, Clone)]
 struct LocalSyncProgress {
+    repaired_pull_requests: Vec<PullRequestRepairOutcome>,
     deleted_branches: Vec<String>,
     restacked_branches: Vec<RestackPreview>,
 }
@@ -96,6 +122,7 @@ struct LocalSyncProgress {
 struct LocalSyncOutcome {
     status: ExitStatus,
     remote_sync_enabled: bool,
+    repaired_pull_requests: Vec<PullRequestRepairOutcome>,
     deleted_branches: Vec<String>,
     restacked_branches: Vec<RestackPreview>,
     failure_output: Option<String>,
@@ -106,12 +133,6 @@ struct LocalSyncOutcome {
 struct OutdatedBranchStep {
     branch_name: String,
     actions: Vec<RestackAction>,
-}
-
-#[derive(Debug)]
-struct PlannedDeletedLocalBranchStep {
-    step: deleted_local::DeletedLocalBranchStep,
-    old_upstream_oid_override: Option<String>,
 }
 
 pub fn run(options: &SyncOptions) -> io::Result<SyncOutcome> {
@@ -230,12 +251,20 @@ fn run_full_sync() -> io::Result<SyncOutcome> {
     workflow::ensure_ready_for_operation(&session.repo, "sync")?;
     workflow::ensure_no_pending_operation(&session.paths, "sync")?;
     let remote_sync_enabled = fetch_sync_remotes(&session)?;
+    let repaired_pull_requests = if remote_sync_enabled {
+        repair_closed_pull_requests_for_deleted_parent_branches(&session)?
+    } else {
+        Vec::new()
+    };
 
     let original_branch = git::current_branch_name()?;
     let outcome = execute_local_sync(
         &mut session,
         original_branch,
-        LocalSyncProgress::default(),
+        LocalSyncProgress {
+            repaired_pull_requests,
+            ..LocalSyncProgress::default()
+        },
         remote_sync_enabled,
     )?;
 
@@ -248,6 +277,7 @@ fn resume_full_sync(
 ) -> io::Result<LocalSyncOutcome> {
     let mut session = open_initialized("dig is not initialized; run 'dig init' first")?;
     let mut progress = LocalSyncProgress {
+        repaired_pull_requests: Vec::new(),
         deleted_branches: payload.deleted_branches,
         restacked_branches: payload.restacked_branches,
     };
@@ -265,6 +295,7 @@ fn resume_full_sync(
         return Ok(LocalSyncOutcome {
             status: restack_outcome.status,
             remote_sync_enabled: payload.remote_sync_enabled,
+            repaired_pull_requests: progress.repaired_pull_requests,
             deleted_branches: progress.deleted_branches,
             restacked_branches: progress.restacked_branches,
             failure_output: restack_outcome.failure_output,
@@ -299,6 +330,7 @@ fn finalize_full_sync_outcome(outcome: LocalSyncOutcome) -> io::Result<SyncOutco
     Ok(SyncOutcome {
         status: outcome.status,
         completion: Some(SyncCompletion::Full(FullSyncOutcome {
+            repaired_pull_requests: outcome.repaired_pull_requests,
             deleted_branches: outcome.deleted_branches,
             restacked_branches: outcome.restacked_branches,
             cleanup_plan,
@@ -317,7 +349,7 @@ fn execute_local_sync(
     let cleanup_mode = clean::mode_for_sync(remote_sync_enabled);
 
     loop {
-        if let Some(step) = plan_deleted_local_branch_step(session, remote_sync_enabled)? {
+        if let Some(step) = plan_deleted_local_branch_step(session)? {
             if let Some(outcome) = apply_deleted_local_branch_step(
                 session,
                 &original_branch,
@@ -370,6 +402,7 @@ fn finish_local_sync(
     Ok(LocalSyncOutcome {
         status,
         remote_sync_enabled,
+        repaired_pull_requests: progress.repaired_pull_requests,
         deleted_branches: progress.deleted_branches,
         restacked_branches: progress.restacked_branches,
         failure_output,
@@ -379,87 +412,31 @@ fn finish_local_sync(
 
 fn plan_deleted_local_branch_step(
     session: &crate::core::store::StoreSession,
-    remote_sync_enabled: bool,
-) -> io::Result<Option<PlannedDeletedLocalBranchStep>> {
-    let Some(step) =
-        deleted_local::next_deleted_local_step(&session.state, &session.config.trunk_branch)?
-    else {
-        return Ok(None);
-    };
-
-    let old_upstream_oid_override = if remote_sync_enabled {
-        merged_pull_request_head_oid_for_deleted_branch(session, step.node_id)?
-    } else {
-        None
-    };
-
-    Ok(Some(PlannedDeletedLocalBranchStep {
-        step,
-        old_upstream_oid_override,
-    }))
+) -> io::Result<Option<deleted_local::DeletedLocalBranchStep>> {
+    deleted_local::next_deleted_local_step(&session.state, &session.config.trunk_branch)
 }
 
 fn apply_deleted_local_branch_step(
     session: &mut crate::core::store::StoreSession,
     original_branch: &str,
     progress: &mut LocalSyncProgress,
-    planned_step: PlannedDeletedLocalBranchStep,
+    step: deleted_local::DeletedLocalBranchStep,
     remote_sync_enabled: bool,
 ) -> io::Result<Option<LocalSyncOutcome>> {
-    let restack_actions = if let Some(old_upstream_oid_override) =
-        planned_step.old_upstream_oid_override.as_deref()
-    {
-        restack::plan_after_deleted_branch_with_old_upstream_override(
-            &session.state,
-            planned_step.step.node_id,
-            &planned_step.step.branch_name,
-            &planned_step.step.new_parent_base,
-            &planned_step.step.new_parent,
-            old_upstream_oid_override,
-        )?
-    } else {
-        deleted_local::restack_actions_for_step(&session.state, &planned_step.step)?
-    };
+    let restack_actions = deleted_local::restack_actions_for_step(&session.state, &step)?;
 
-    deleted_local::archive_deleted_local_step(session, &planned_step.step)?;
-    progress
-        .deleted_branches
-        .push(planned_step.step.branch_name.clone());
+    deleted_local::archive_deleted_local_step(session, &step)?;
+    progress.deleted_branches.push(step.branch_name.clone());
 
     execute_sync_restack_step(
         session,
         original_branch,
         progress,
         PendingSyncPhase::ReconcileDeletedLocalBranches,
-        &planned_step.step.branch_name,
+        &step.branch_name,
         &restack_actions,
         remote_sync_enabled,
     )
-}
-
-fn merged_pull_request_head_oid_for_deleted_branch(
-    session: &crate::core::store::StoreSession,
-    node_id: uuid::Uuid,
-) -> io::Result<Option<String>> {
-    let Some(node) = session.state.find_branch_by_id(node_id) else {
-        return Ok(None);
-    };
-    let Some(pull_request) = node.pull_request.as_ref() else {
-        return Ok(None);
-    };
-
-    let pull_request_status = gh::view_pull_request(pull_request.number).map_err(|err| {
-        io::Error::other(format!(
-            "failed to inspect tracked pull request #{} for missing branch '{}': {}",
-            pull_request.number, node.branch_name, err
-        ))
-    })?;
-
-    if pull_request_status.state == PullRequestState::Merged {
-        Ok(Some(pull_request_status.head_ref_oid))
-    } else {
-        Ok(None)
-    }
 }
 
 fn plan_outdated_branch_step(
@@ -498,14 +475,18 @@ fn plan_outdated_branch_step(
             continue;
         }
 
-        let parent_branch_name = graph
-            .parent_branch_name(&node, &session.config.trunk_branch)
-            .ok_or_else(|| {
-                io::Error::other(format!(
-                    "tracked parent for '{}' is missing from dig",
-                    node.branch_name
-                ))
-            })?;
+        let (parent_base, _) = deleted_local::resolve_replacement_parent(
+            &session.state,
+            &session.config.trunk_branch,
+            &node.parent,
+        )
+        .map_err(|_| {
+            io::Error::other(format!(
+                "tracked parent for '{}' is missing from dig",
+                node.branch_name
+            ))
+        })?;
+        let parent_branch_name = parent_base.branch_name;
 
         if !git::branch_exists(&parent_branch_name)? {
             return Err(io::Error::new(
@@ -595,6 +576,7 @@ fn execute_sync_restack_step(
         return Ok(Some(LocalSyncOutcome {
             status: restack_outcome.status,
             remote_sync_enabled,
+            repaired_pull_requests: progress.repaired_pull_requests.clone(),
             deleted_branches: progress.deleted_branches.clone(),
             restacked_branches: progress.restacked_branches.clone(),
             failure_output: restack_outcome.failure_output,
@@ -603,6 +585,267 @@ fn execute_sync_restack_step(
     }
 
     Ok(None)
+}
+
+fn repair_closed_pull_requests_for_deleted_parent_branches(
+    session: &crate::core::store::StoreSession,
+) -> io::Result<Vec<PullRequestRepairOutcome>> {
+    let graph = BranchGraph::new(&session.state);
+    let mut candidates = session
+        .state
+        .nodes
+        .iter()
+        .filter(|node| !node.archived)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    candidates.sort_by(|left, right| {
+        graph
+            .branch_depth(left.id)
+            .cmp(&graph.branch_depth(right.id))
+            .then_with(|| left.branch_name.cmp(&right.branch_name))
+    });
+
+    let mut repaired_pull_requests = Vec::new();
+    for node in candidates {
+        let Some(parent_plan) = plan_parent_pull_request_repair(session, &node)? else {
+            continue;
+        };
+
+        let pending_repairs = plan_pull_request_repairs_for_children(
+            session,
+            &node,
+            &parent_plan.new_base_branch_name,
+        )?;
+        if pending_repairs.is_empty() {
+            continue;
+        }
+
+        restore_remote_branch_for_pull_request_repair(
+            &parent_plan.remote_target,
+            &parent_plan.restore_source_ref,
+        )?;
+
+        for repair in &pending_repairs {
+            gh::reopen_pull_request(repair.pull_request_number).map_err(|err| {
+                io::Error::other(format!(
+                    "failed to reopen tracked pull request #{} for '{}': {err}",
+                    repair.pull_request_number, repair.branch_name
+                ))
+            })?;
+
+            if !repair.was_draft {
+                gh::mark_pull_request_as_draft(repair.pull_request_number).map_err(|err| {
+                    io::Error::other(format!(
+                        "failed to convert tracked pull request #{} for '{}' back to draft: {err}",
+                        repair.pull_request_number, repair.branch_name
+                    ))
+                })?;
+            }
+
+            gh::retarget_pull_request_base(
+                repair.pull_request_number,
+                &repair.new_base_branch_name,
+            )
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to retarget tracked pull request #{} for '{}' onto '{}': {err}",
+                    repair.pull_request_number, repair.branch_name, repair.new_base_branch_name
+                ))
+            })?;
+        }
+
+        delete_restored_remote_branch_after_pull_request_repair(&parent_plan.remote_target)?;
+
+        repaired_pull_requests.extend(pending_repairs.into_iter().map(|repair| {
+            PullRequestRepairOutcome {
+                branch_name: repair.branch_name,
+                pull_request_number: repair.pull_request_number,
+                old_base_branch_name: repair.old_base_branch_name,
+                new_base_branch_name: repair.new_base_branch_name,
+            }
+        }));
+    }
+
+    Ok(repaired_pull_requests)
+}
+
+fn plan_parent_pull_request_repair(
+    session: &crate::core::store::StoreSession,
+    node: &BranchNode,
+) -> io::Result<Option<ParentPullRequestRepairPlan>> {
+    let Some(remote_target) = git::branch_push_target(&node.branch_name)? else {
+        return Ok(None);
+    };
+    if git::remote_tracking_branch_exists(&remote_target.remote_name, &remote_target.branch_name)? {
+        return Ok(None);
+    }
+
+    if let Some(cleanup_candidate) = clean::cleanup_candidate_for_branch(
+        &session.state,
+        &session.config.trunk_branch,
+        node,
+        CleanPlanMode::RemoteAwareSync,
+    )? {
+        let restore_source_ref = if git::branch_exists(&node.branch_name)? {
+            node.branch_name.clone()
+        } else if let Some(source_ref) = merged_pull_request_restore_source(node)? {
+            source_ref
+        } else {
+            return Ok(None);
+        };
+
+        return Ok(Some(ParentPullRequestRepairPlan {
+            remote_target,
+            restore_source_ref,
+            new_base_branch_name: cleanup_candidate.parent_branch_name,
+        }));
+    }
+
+    let Some(restore_source_ref) = merged_pull_request_restore_source(node)? else {
+        return Ok(None);
+    };
+    let Ok((new_parent_base, _)) = deleted_local::resolve_replacement_parent(
+        &session.state,
+        &session.config.trunk_branch,
+        &node.parent,
+    ) else {
+        return Ok(None);
+    };
+
+    Ok(Some(ParentPullRequestRepairPlan {
+        remote_target,
+        restore_source_ref,
+        new_base_branch_name: new_parent_base.branch_name,
+    }))
+}
+
+fn merged_pull_request_restore_source(node: &BranchNode) -> io::Result<Option<String>> {
+    let Some(pull_request) = node.pull_request.as_ref() else {
+        return Ok(None);
+    };
+    let pull_request_status = gh::view_pull_request(pull_request.number).map_err(|err| {
+        io::Error::other(format!(
+            "failed to inspect tracked pull request #{} for '{}': {}",
+            pull_request.number, node.branch_name, err
+        ))
+    })?;
+
+    if pull_request_status.state != PullRequestState::Merged
+        || pull_request_status.merged_at.is_none()
+    {
+        return Ok(None);
+    }
+
+    Ok(pull_request_status.head_ref_oid)
+}
+
+fn plan_pull_request_repairs_for_children(
+    session: &crate::core::store::StoreSession,
+    parent_node: &BranchNode,
+    new_base_branch_name: &str,
+) -> io::Result<Vec<PendingPullRequestRepair>> {
+    let graph = BranchGraph::new(&session.state);
+    let mut children = graph
+        .active_children_ids(parent_node.id)
+        .into_iter()
+        .filter_map(|child_id| session.state.find_branch_by_id(child_id).cloned())
+        .collect::<Vec<_>>();
+    children.sort_by(|left, right| left.branch_name.cmp(&right.branch_name));
+
+    let mut pending_repairs = Vec::new();
+    for child in children {
+        if !git::branch_exists(&child.branch_name)? {
+            continue;
+        }
+
+        let Some(tracked_pull_request) = child.pull_request.as_ref() else {
+            continue;
+        };
+        let pull_request_status =
+            gh::view_pull_request(tracked_pull_request.number).map_err(|err| {
+                io::Error::other(format!(
+                    "failed to inspect tracked pull request #{} for '{}': {err}",
+                    tracked_pull_request.number, child.branch_name
+                ))
+            })?;
+
+        if pull_request_needs_repair(
+            &pull_request_status,
+            &child.branch_name,
+            &parent_node.branch_name,
+        ) {
+            pending_repairs.push(PendingPullRequestRepair {
+                branch_name: child.branch_name.clone(),
+                pull_request_number: tracked_pull_request.number,
+                old_base_branch_name: parent_node.branch_name.clone(),
+                new_base_branch_name: new_base_branch_name.to_string(),
+                was_draft: pull_request_status.is_draft,
+            });
+        }
+    }
+
+    Ok(pending_repairs)
+}
+
+fn pull_request_needs_repair(
+    pull_request_status: &PullRequestStatus,
+    expected_head_branch_name: &str,
+    expected_base_branch_name: &str,
+) -> bool {
+    pull_request_status.state == PullRequestState::Closed
+        && pull_request_status.merged_at.is_none()
+        && pull_request_status.head_ref_name == expected_head_branch_name
+        && pull_request_status.base_ref_name == expected_base_branch_name
+}
+
+fn restore_remote_branch_for_pull_request_repair(
+    target: &git::BranchPushTarget,
+    restore_source_ref: &str,
+) -> io::Result<()> {
+    let push_output = git::push_ref_to_remote_branch(
+        &target.remote_name,
+        restore_source_ref,
+        &target.branch_name,
+    )?;
+    if push_output.status.success() {
+        Ok(())
+    } else {
+        let combined_output = push_output.combined_output();
+        Err(io::Error::other(if combined_output.is_empty() {
+            format!(
+                "failed to temporarily restore remote branch '{}' on '{}'",
+                target.branch_name, target.remote_name
+            )
+        } else {
+            format!(
+                "failed to temporarily restore remote branch '{}' on '{}': {}",
+                target.branch_name, target.remote_name, combined_output
+            )
+        }))
+    }
+}
+
+fn delete_restored_remote_branch_after_pull_request_repair(
+    target: &git::BranchPushTarget,
+) -> io::Result<()> {
+    let delete_output = git::delete_branch_from_remote(target)?;
+    if delete_output.status.success() {
+        Ok(())
+    } else {
+        let combined_output = delete_output.combined_output();
+        Err(io::Error::other(if combined_output.is_empty() {
+            format!(
+                "failed to delete temporary remote branch '{}' on '{}'",
+                target.branch_name, target.remote_name
+            )
+        } else {
+            format!(
+                "failed to delete temporary remote branch '{}' on '{}': {}",
+                target.branch_name, target.remote_name, combined_output
+            )
+        }))
+    }
 }
 
 fn fetch_sync_remotes(session: &crate::core::store::StoreSession) -> io::Result<bool> {
@@ -726,24 +969,21 @@ pub fn plan_pull_request_updates(
     restacked_branch_names: &[String],
 ) -> io::Result<PullRequestUpdatePlan> {
     let session = open_initialized("dig is not initialized; run 'dig init' first")?;
-    let graph = BranchGraph::new(&session.state);
     let candidate_branch_names = dedup_branch_names(restacked_branch_names);
     let mut actions = Vec::new();
 
     for branch_name in candidate_branch_names {
-        let Some(node) = session
-            .state
-            .nodes
-            .iter()
-            .find(|node| !node.archived && node.branch_name == branch_name)
-        else {
+        let Some(node) = session.state.find_branch_by_name(&branch_name) else {
             continue;
         };
         let Some(pull_request) = node.pull_request.as_ref() else {
             continue;
         };
-        let Some(parent_branch_name) = graph.parent_branch_name(node, &session.config.trunk_branch)
-        else {
+        let Ok((parent_base, _)) = deleted_local::resolve_replacement_parent(
+            &session.state,
+            &session.config.trunk_branch,
+            &node.parent,
+        ) else {
             continue;
         };
 
@@ -755,7 +995,7 @@ pub fn plan_pull_request_updates(
         })?;
 
         if pull_request_status.state != PullRequestState::Open
-            || pull_request_status.base_ref_name == parent_branch_name
+            || pull_request_status.base_ref_name == parent_base.branch_name
         {
             continue;
         }
@@ -763,7 +1003,7 @@ pub fn plan_pull_request_updates(
         actions.push(PullRequestUpdateAction {
             branch_name: node.branch_name.clone(),
             pull_request_number: pull_request.number,
-            new_base_branch_name: parent_branch_name,
+            new_base_branch_name: parent_base.branch_name,
         });
     }
 
@@ -776,17 +1016,16 @@ pub fn execute_pull_request_update_plan(
     let mut updated_actions = Vec::new();
 
     for action in &plan.actions {
-        gh::edit_pull_request_base(action.pull_request_number, &action.new_base_branch_name)
+        gh::retarget_pull_request_base(action.pull_request_number, &action.new_base_branch_name)
             .map_err(|err| {
                 io::Error::other(format!(
-                    "failed to retarget pull request #{} for '{}' to '{}': {}",
+                    "failed to retarget tracked pull request #{} for '{}' onto '{}': {}",
                     action.pull_request_number,
                     action.branch_name,
                     action.new_base_branch_name,
                     err
                 ))
             })?;
-
         updated_actions.push(action.clone());
     }
 
@@ -860,7 +1099,8 @@ fn plan_remote_push_action(
 
 #[cfg(test)]
 mod tests {
-    use super::{RemotePushActionKind, plan_remote_pushes};
+    use super::{RemotePushActionKind, plan_remote_pushes, pull_request_needs_repair};
+    use crate::core::gh::{PullRequestState, PullRequestStatus};
     use crate::core::test_support::{
         append_file, commit_file, create_tracked_branch, git_ok, initialize_main_repo,
         with_temp_repo,
@@ -938,5 +1178,79 @@ mod tests {
                 RemotePushActionKind::UpdateRemoteBranch
             );
         });
+    }
+
+    #[test]
+    fn repairs_only_closed_unmerged_pull_requests_with_expected_head_and_base() {
+        assert!(pull_request_needs_repair(
+            &PullRequestStatus {
+                number: 42,
+                state: PullRequestState::Closed,
+                merged_at: None,
+                base_ref_name: "feat/auth".into(),
+                head_ref_name: "feat/auth-ui".into(),
+                head_ref_oid: None,
+                is_draft: false,
+                url: "https://github.com/acme/dig/pull/42".into(),
+            },
+            "feat/auth-ui",
+            "feat/auth",
+        ));
+        assert!(!pull_request_needs_repair(
+            &PullRequestStatus {
+                number: 42,
+                state: PullRequestState::Open,
+                merged_at: None,
+                base_ref_name: "feat/auth".into(),
+                head_ref_name: "feat/auth-ui".into(),
+                head_ref_oid: None,
+                is_draft: false,
+                url: "https://github.com/acme/dig/pull/42".into(),
+            },
+            "feat/auth-ui",
+            "feat/auth",
+        ));
+        assert!(!pull_request_needs_repair(
+            &PullRequestStatus {
+                number: 42,
+                state: PullRequestState::Closed,
+                merged_at: Some("2026-03-26T12:00:00Z".into()),
+                base_ref_name: "feat/auth".into(),
+                head_ref_name: "feat/auth-ui".into(),
+                head_ref_oid: None,
+                is_draft: false,
+                url: "https://github.com/acme/dig/pull/42".into(),
+            },
+            "feat/auth-ui",
+            "feat/auth",
+        ));
+        assert!(!pull_request_needs_repair(
+            &PullRequestStatus {
+                number: 42,
+                state: PullRequestState::Closed,
+                merged_at: None,
+                base_ref_name: "main".into(),
+                head_ref_name: "feat/auth-ui".into(),
+                head_ref_oid: None,
+                is_draft: false,
+                url: "https://github.com/acme/dig/pull/42".into(),
+            },
+            "feat/auth-ui",
+            "feat/auth",
+        ));
+        assert!(!pull_request_needs_repair(
+            &PullRequestStatus {
+                number: 42,
+                state: PullRequestState::Closed,
+                merged_at: None,
+                base_ref_name: "feat/auth".into(),
+                head_ref_name: "feat/auth-api".into(),
+                head_ref_oid: None,
+                is_draft: false,
+                url: "https://github.com/acme/dig/pull/42".into(),
+            },
+            "feat/auth-ui",
+            "feat/auth",
+        ));
     }
 }

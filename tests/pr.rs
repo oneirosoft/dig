@@ -137,7 +137,7 @@ fn pr_merge_retargets_open_child_pull_request_before_merging_parent() {
 set -eu
 printf '%s\n' "$*" >> "$DIG_TEST_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$3" = "124" ]; then
-  printf '{"number":124,"state":"OPEN","baseRefName":"feat/auth","headRefName":"feat/auth-ui","headRefOid":"abc123","url":"https://github.com/acme/dig/pull/124"}\n'
+  printf '{"number":124,"state":"OPEN","mergedAt":null,"baseRefName":"feat/auth","headRefName":"feat/auth-ui","headRefOid":"abc123","isDraft":false,"url":"https://github.com/acme/dig/pull/124"}\n'
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "edit" ] && [ "$3" = "124" ] && [ "$4" = "--base" ] && [ "$5" = "main" ]; then
@@ -170,7 +170,7 @@ exit 1
         assert_eq!(
             lines,
             vec![
-                "pr view 124 --json number,state,baseRefName,headRefName,headRefOid,url",
+                "pr view 124 --json number,state,mergedAt,baseRefName,headRefName,headRefOid,isDraft,url",
                 "pr edit 124 --base main",
                 "pr merge 123 --squash --delete-branch",
             ]

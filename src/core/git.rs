@@ -370,6 +370,22 @@ pub fn push_branch_to_remote(target: &BranchPushTarget) -> io::Result<GitCommand
     output_to_git_command_output(output)
 }
 
+pub fn push_ref_to_remote_branch(
+    remote_name: &str,
+    source_ref: &str,
+    target_branch_name: &str,
+) -> io::Result<GitCommandOutput> {
+    let output = Command::new("git")
+        .args([
+            "push",
+            remote_name,
+            &format!("{source_ref}:refs/heads/{target_branch_name}"),
+        ])
+        .output()?;
+
+    output_to_git_command_output(output)
+}
+
 pub fn force_push_branch_to_remote_with_lease(
     target: &BranchPushTarget,
 ) -> io::Result<GitCommandOutput> {
@@ -380,6 +396,18 @@ pub fn force_push_branch_to_remote_with_lease(
             "-u",
             &target.remote_name,
             &target.branch_name,
+        ])
+        .output()?;
+
+    output_to_git_command_output(output)
+}
+
+pub fn delete_branch_from_remote(target: &BranchPushTarget) -> io::Result<GitCommandOutput> {
+    let output = Command::new("git")
+        .args([
+            "push",
+            &target.remote_name,
+            &format!(":refs/heads/{}", target.branch_name),
         ])
         .output()?;
 

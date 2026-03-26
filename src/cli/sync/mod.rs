@@ -260,6 +260,20 @@ impl From<SyncArgs> for SyncOptions {
 fn format_full_sync_summary(outcome: &sync::FullSyncOutcome) -> String {
     let mut sections = Vec::new();
 
+    if !outcome.repaired_pull_requests.is_empty() {
+        let mut lines = vec!["Recovered pull requests:".to_string()];
+        for repair in &outcome.repaired_pull_requests {
+            lines.push(format!(
+                "- {} (#{}): reopened as draft and retargeted from {} to {}",
+                repair.branch_name,
+                repair.pull_request_number,
+                repair.old_base_branch_name,
+                repair.new_base_branch_name
+            ));
+        }
+        sections.push(lines.join("\n"));
+    }
+
     if !outcome.deleted_branches.is_empty() {
         let mut lines = vec!["Deleted locally and no longer tracked by dig:".to_string()];
         for branch_name in &outcome.deleted_branches {
