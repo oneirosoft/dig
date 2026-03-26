@@ -74,7 +74,7 @@ dig commit -m "message"         # commit and restack tracked descendants if need
 dig sync                        # reconcile local dig state, restack stale stacks, then offer cleanup
 dig sync --continue             # continue a paused restack after resolving conflicts
 dig merge <branch>              # merge a tracked branch into its tracked parent
-dig clean                       # remove tracked branches already merged into their parent
+dig clean                       # stop tracking missing local branches and remove merged tracked branches
 dig adopt <branch> -p <parent>  # start tracking an existing local branch
 dig orphan <branch>             # stop tracking a branch but keep the local branch
 ```
@@ -91,7 +91,7 @@ Today `dig sync` is local-only. It will:
 
 1. Stop tracking branches that were deleted locally but are still tracked by dig.
 2. Restack tracked branches whose parent branch has moved ahead.
-3. Offer the existing cleanup flow for tracked branches already merged into their parent.
+3. Offer the same cleanup flow as `dig clean` for tracked branches that are now missing locally or already merged into their parent.
 
 If cleanup finds merged branches, `dig sync` reuses the same delete prompt as `dig clean`. If you decline that prompt, sync still succeeds and leaves cleanup for later.
 

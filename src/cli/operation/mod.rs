@@ -109,6 +109,7 @@ pub enum BranchStatus {
     },
     Succeeded,
     Deleted,
+    Archived,
 }
 
 impl BranchStatus {
@@ -148,7 +149,7 @@ pub fn render_sections(sections: &[OperationSection], final_view: bool) -> Strin
 fn render_section(section: &OperationSection, final_view: bool) -> String {
     let roots = if final_view
         && section.promote_children_on_deleted_root
-        && matches!(section.root.status, BranchStatus::Deleted)
+        && matches!(section.root.status, BranchStatus::Deleted | BranchStatus::Archived)
     {
         section.root.children.as_slice()
     } else {
@@ -193,6 +194,13 @@ fn format_branch_label(node: &VisualNode) -> String {
                 "{} {}",
                 Accent::Failure.paint_ansi(markers::DELETED),
                 Accent::Failure.paint_struck_ansi(&node.branch_name)
+            )
+        }
+        BranchStatus::Archived => {
+            format!(
+                "{} {}",
+                Accent::TagRef.paint_ansi(markers::ARCHIVED),
+                Accent::TagRef.paint_struck_ansi(&node.branch_name)
             )
         }
     }

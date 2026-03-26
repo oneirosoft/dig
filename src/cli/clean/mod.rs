@@ -38,8 +38,7 @@ pub fn execute(args: CleanArgs) -> io::Result<CommandOutcome> {
 
     println!("{}", format_clean_plan(&plan));
 
-    let branch_count = plan.candidates.len();
-    if !confirm_cleanup(branch_count)? {
+    if !confirm_cleanup(&plan)? {
         println!("Aborted.");
         return Ok(CommandOutcome {
             status: git::success_status()?,
@@ -67,35 +66,72 @@ impl From<CleanArgs> for CleanOptions {
 }
 
 pub(crate) fn format_clean_plan(plan: &CleanPlan) -> String {
-    let mut lines = vec!["Merged branches ready to clean:".to_string()];
+    let deleted_candidates = plan
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.is_deleted_locally())
+        .collect::<Vec<_>>();
+    let merged_candidates = plan
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.is_integrated())
+        .collect::<Vec<_>>();
+    let mut sections = Vec::new();
 
-    for candidate in &plan.candidates {
-        let parent_branch = match &candidate.reason {
-            CleanReason::IntegratedIntoParent { parent_branch } => parent_branch,
-        };
+    if !deleted_candidates.is_empty() {
+        let mut lines = vec!["Tracked branches missing locally and ready to stop tracking:".to_string()];
 
-        lines.push(format!(
-            "- {} merged into {}",
-            candidate.branch_name, parent_branch
-        ));
+        for candidate in deleted_candidates {
+            lines.push(format!("- {} no longer exists locally", candidate.branch_name));
 
-        for restack in &candidate.restack_plan {
-            lines.push(format!(
-                "  restack {} onto {}",
-                restack.branch_name, restack.onto_branch
-            ));
+            for restack in &candidate.restack_plan {
+                lines.push(format!(
+                    "  restack {} onto {}",
+                    restack.branch_name, restack.onto_branch
+                ));
+            }
         }
+
+        sections.push(lines.join("\n"));
     }
 
+    if !merged_candidates.is_empty() {
+        let mut lines = vec!["Merged branches ready to clean:".to_string()];
+
+        for candidate in merged_candidates {
+            let parent_branch = match &candidate.reason {
+                CleanReason::DeletedLocally => continue,
+                CleanReason::IntegratedIntoParent { parent_branch } => parent_branch,
+            };
+
+            lines.push(format!(
+                "- {} merged into {}",
+                candidate.branch_name, parent_branch
+            ));
+
+            for restack in &candidate.restack_plan {
+                lines.push(format!(
+                    "  restack {} onto {}",
+                    restack.branch_name, restack.onto_branch
+                ));
+            }
+        }
+
+        sections.push(lines.join("\n"));
+    }
+
+    let mut rendered = common::join_sections(&sections);
     if plan.targets_current_branch() && plan.current_branch != plan.trunk_branch {
-        lines.push(String::new());
-        lines.push(format!(
+        if !rendered.is_empty() {
+            rendered.push_str("\n\n");
+        }
+        rendered.push_str(&format!(
             "Will switch from '{}' to '{}' before cleanup.",
             plan.current_branch, plan.trunk_branch
         ));
     }
 
-    lines.join("\n")
+    rendered
 }
 
 fn format_blocked_branch(blocked: &crate::core::clean::BlockedBranch) -> String {
@@ -127,14 +163,21 @@ fn format_blocked_branch(blocked: &crate::core::clean::BlockedBranch) -> String 
     }
 }
 
-pub(crate) fn confirm_cleanup(branch_count: usize) -> io::Result<bool> {
-    let label = if branch_count == 1 {
-        "branch"
-    } else {
-        "branches"
+pub(crate) fn confirm_cleanup(plan: &CleanPlan) -> io::Result<bool> {
+    let missing_count = plan.deleted_local_count();
+    let merged_count = plan.merged_count();
+    let merged_label = if merged_count == 1 { "branch" } else { "branches" };
+    let missing_label = if missing_count == 1 { "branch" } else { "branches" };
+
+    let prompt = match (missing_count, merged_count) {
+        (0, merged) => format!("Delete {merged} merged {merged_label}? [y/N] "),
+        (missing, 0) => format!("Stop tracking {missing} missing {missing_label}? [y/N] "),
+        (missing, merged) => format!(
+            "Delete {merged} merged {merged_label} and stop tracking {missing} missing {missing_label}? [y/N] "
+        ),
     };
 
-    common::confirm_yes_no(&format!("Delete {branch_count} merged {label}? [y/N] "))
+    common::confirm_yes_no(&prompt)
 }
 
 fn execute_with_animation(plan: &CleanPlan) -> io::Result<crate::core::clean::CleanApplyOutcome> {
@@ -221,6 +264,16 @@ pub(crate) fn format_clean_success_output(
         ));
     }
 
+    if !outcome.untracked_branches.is_empty() {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push("No longer tracked by dig:".to_string());
+        for branch_name in &outcome.untracked_branches {
+            lines.push(format!("- {branch_name}"));
+        }
+    }
+
     if !outcome.deleted_branches.is_empty() {
         if !lines.is_empty() {
             lines.push(String::new());
@@ -293,6 +346,41 @@ mod tests {
                 "  restack feat/auth-api onto main\n",
                 "\n",
                 "Will switch from 'feat/auth' to 'main' before cleanup."
+            )
+        );
+    }
+
+    #[test]
+    fn formats_clean_plan_with_deleted_local_section() {
+        let rendered = format_clean_plan(&CleanPlan {
+            trunk_branch: "main".into(),
+            current_branch: "main".into(),
+            requested_branch_name: None,
+            candidates: vec![CleanCandidate {
+                node_id: Uuid::new_v4(),
+                branch_name: "feat/auth".into(),
+                parent_branch_name: "main".into(),
+                reason: CleanReason::DeletedLocally,
+                tree: CleanTreeNode {
+                    branch_name: "feat/auth".into(),
+                    children: vec![],
+                },
+                restack_plan: vec![RestackPreview {
+                    branch_name: "feat/users".into(),
+                    onto_branch: "main".into(),
+                    parent_changed: true,
+                }],
+                depth: 0,
+            }],
+            blocked: Vec::new(),
+        });
+
+        assert_eq!(
+            rendered,
+            concat!(
+                "Tracked branches missing locally and ready to stop tracking:\n",
+                "- feat/auth no longer exists locally\n",
+                "  restack feat/users onto main"
             )
         );
     }

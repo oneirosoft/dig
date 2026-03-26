@@ -52,6 +52,14 @@ impl CleanAnimation {
                 .find_node_mut(branch_name)
                 .map(|node| node.status = BranchStatus::Deleted)
                 .is_some(),
+            CleanEvent::ArchiveStarted { branch_name } => self
+                .find_node_mut(branch_name)
+                .map(|node| node.status = BranchStatus::start_in_flight())
+                .is_some(),
+            CleanEvent::ArchiveCompleted { branch_name } => self
+                .find_node_mut(branch_name)
+                .map(|node| node.status = BranchStatus::Archived)
+                .is_some(),
         }
     }
 
@@ -150,6 +158,48 @@ mod tests {
         assert_eq!(
             animation.render_final(),
             concat!("main\n", "└── \u{1b}[32m✓\u{1b}[0m feat/auth-api")
+        );
+    }
+
+    #[test]
+    fn renders_archived_branch_then_final_promoted_children() {
+        let mut animation = CleanAnimation::new(&CleanPlan {
+            trunk_branch: "main".into(),
+            current_branch: "main".into(),
+            requested_branch_name: None,
+            candidates: vec![CleanCandidate {
+                node_id: Uuid::new_v4(),
+                branch_name: "feat/auth".into(),
+                parent_branch_name: "main".into(),
+                reason: CleanReason::DeletedLocally,
+                tree: CleanTreeNode {
+                    branch_name: "feat/auth".into(),
+                    children: vec![CleanTreeNode {
+                        branch_name: "feat/users".into(),
+                        children: vec![],
+                    }],
+                },
+                restack_plan: vec![],
+                depth: 0,
+            }],
+            blocked: vec![],
+        });
+
+        animation.apply_event(&CleanEvent::ArchiveCompleted {
+            branch_name: "feat/auth".into(),
+        });
+
+        assert_eq!(
+            animation.render_active(),
+            concat!(
+                "main\n",
+                "└── \u{1b}[33m~\u{1b}[0m \u{1b}[33m\u{1b}[9mfeat/auth\u{1b}[0m\n",
+                "    └── feat/users"
+            )
+        );
+        assert_eq!(
+            animation.render_final(),
+            concat!("main\n", "└── feat/users")
         );
     }
 }

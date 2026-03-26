@@ -21,7 +21,7 @@ pub(crate) use state::{load_state, save_state};
 pub(crate) use types::{
     BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchCreatedEvent, BranchNode,
     BranchReparentedEvent, DigConfig, DigEvent, ParentRef, PendingAdoptOperation,
-    PendingCleanOperation, PendingCommitEntry, PendingCommitOperation, PendingMergeOperation,
-    PendingOperationKind, PendingOperationState, PendingOrphanOperation, PendingSyncOperation,
-    PendingSyncPhase, now_unix_timestamp_secs,
+    PendingCleanCandidate, PendingCleanCandidateKind, PendingCleanOperation, PendingCommitEntry,
+    PendingCommitOperation, PendingMergeOperation, PendingOperationKind, PendingOperationState,
+    PendingOrphanOperation, PendingSyncOperation, PendingSyncPhase, now_unix_timestamp_secs,
 };

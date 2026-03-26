@@ -210,10 +210,24 @@ pub struct PendingCleanOperation {
     pub trunk_branch: String,
     pub original_branch: String,
     pub switched_to_trunk_from: Option<String>,
-    pub current_candidate_branch_name: String,
-    pub remaining_branch_names: Vec<String>,
+    pub current_candidate: PendingCleanCandidate,
+    pub remaining_candidates: Vec<PendingCleanCandidate>,
+    pub untracked_branches: Vec<String>,
     pub deleted_branches: Vec<String>,
     pub restacked_branches: Vec<RestackPreview>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingCleanCandidate {
+    pub branch_name: String,
+    pub kind: PendingCleanCandidateKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingCleanCandidateKind {
+    DeletedLocally,
+    IntegratedIntoParent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

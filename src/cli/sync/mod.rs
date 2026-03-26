@@ -105,7 +105,7 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
                         super::clean::format_clean_plan(&full_outcome.cleanup_plan)
                     );
 
-                    if !super::clean::confirm_cleanup(full_outcome.cleanup_plan.candidates.len())? {
+                    if !super::clean::confirm_cleanup(&full_outcome.cleanup_plan)? {
                         println!("Skipped cleanup.");
                     } else {
                         println!();

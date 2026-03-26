@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::io;
 
+use crate::core::deleted_local;
 use crate::core::git::{self, CherryMarker, CommitMetadata};
 use crate::core::graph::BranchGraph;
 use crate::core::restack;
@@ -47,13 +48,39 @@ fn plan_for_requested_branch(
     current_branch: &str,
     branch_name: &str,
 ) -> io::Result<CleanPlan> {
-    let evaluation = match state.find_branch_by_name(branch_name) {
-        Some(node) => evaluate_branch(state, trunk_branch, node)?,
-        None => BranchEvaluation::Blocked(BlockedBranch {
-            branch_name: branch_name.to_string(),
-            reason: CleanBlockReason::BranchNotTracked,
-        }),
+    let Some(node) = state.find_branch_by_name(branch_name) else {
+        return Ok(CleanPlan {
+            trunk_branch: trunk_branch.to_string(),
+            current_branch: current_branch.to_string(),
+            requested_branch_name: Some(branch_name.to_string()),
+            candidates: Vec::new(),
+            blocked: vec![BlockedBranch {
+                branch_name: branch_name.to_string(),
+                reason: CleanBlockReason::BranchNotTracked,
+            }],
+        });
     };
+
+    if !git::branch_exists(&node.branch_name)? {
+        let candidates = deleted_local::collect_deleted_local_subtree_steps(
+            state,
+            trunk_branch,
+            node.id,
+        )?
+        .into_iter()
+        .map(clean_candidate_from_deleted_step)
+        .collect();
+
+        return Ok(CleanPlan {
+            trunk_branch: trunk_branch.to_string(),
+            current_branch: current_branch.to_string(),
+            requested_branch_name: Some(branch_name.to_string()),
+            candidates,
+            blocked: Vec::new(),
+        });
+    }
+
+    let evaluation = evaluate_integrated_branch(state, trunk_branch, node)?;
 
     let (candidates, blocked) = match evaluation {
         BranchEvaluation::Cleanable(candidate) => (vec![candidate], Vec::new()),
@@ -74,11 +101,19 @@ fn plan_for_all_branches(
     trunk_branch: &str,
     current_branch: &str,
 ) -> io::Result<CleanPlan> {
+    let deleted_steps = deleted_local::collect_deleted_local_steps(state, trunk_branch)?;
+    let deleted_candidates = deleted_steps
+        .iter()
+        .cloned()
+        .map(clean_candidate_from_deleted_step)
+        .collect::<Vec<_>>();
+    let projected_state = apply_deleted_step_projection(state, &deleted_steps)?;
+
     let mut cleanable = Vec::new();
     let mut blocked = Vec::new();
 
-    for node in state.nodes.iter().filter(|node| !node.archived) {
-        match evaluate_branch(state, trunk_branch, node)? {
+    for node in projected_state.nodes.iter().filter(|node| !node.archived) {
+        match evaluate_integrated_branch(&projected_state, trunk_branch, node)? {
             BranchEvaluation::Cleanable(candidate) => cleanable.push(candidate),
             BranchEvaluation::Blocked(blocked_branch) => blocked.push(blocked_branch),
         }
@@ -89,22 +124,25 @@ fn plan_for_all_branches(
         .map(|candidate| candidate.node_id)
         .collect::<HashSet<_>>();
 
-    let mut candidates = cleanable
+    let mut merged_candidates = cleanable
         .into_iter()
         .filter(|candidate| {
-            !BranchGraph::new(state)
+            !BranchGraph::new(&projected_state)
                 .active_descendant_ids(candidate.node_id)
                 .iter()
                 .any(|descendant_id| cleanable_ids.contains(descendant_id))
         })
         .collect::<Vec<_>>();
 
-    candidates.sort_by(|left, right| {
+    merged_candidates.sort_by(|left, right| {
         right
             .depth
             .cmp(&left.depth)
             .then_with(|| left.branch_name.cmp(&right.branch_name))
     });
+
+    let mut candidates = deleted_candidates;
+    candidates.extend(merged_candidates);
 
     Ok(CleanPlan {
         trunk_branch: trunk_branch.to_string(),
@@ -115,7 +153,20 @@ fn plan_for_all_branches(
     })
 }
 
-fn evaluate_branch(
+fn apply_deleted_step_projection(
+    state: &DigState,
+    deleted_steps: &[deleted_local::DeletedLocalBranchStep],
+) -> io::Result<DigState> {
+    let mut projected_state = state.clone();
+
+    for step in deleted_steps {
+        deleted_local::simulate_deleted_local_step(&mut projected_state, &step)?;
+    }
+
+    Ok(projected_state)
+}
+
+fn evaluate_integrated_branch(
     state: &DigState,
     trunk_branch: &str,
     node: &BranchNode,
@@ -183,6 +234,18 @@ fn evaluate_branch(
         restack_plan: restack::previews_for_actions(&restack_actions),
         depth: graph.branch_depth(node.id),
     }))
+}
+
+fn clean_candidate_from_deleted_step(step: deleted_local::DeletedLocalBranchStep) -> CleanCandidate {
+    CleanCandidate {
+        node_id: step.node_id,
+        branch_name: step.branch_name,
+        parent_branch_name: step.new_parent_branch_name,
+        reason: CleanReason::DeletedLocally,
+        tree: step.tree,
+        restack_plan: step.restack_plan,
+        depth: step.depth,
+    }
 }
 
 pub(crate) fn branch_is_integrated(

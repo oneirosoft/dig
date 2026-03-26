@@ -25,6 +25,20 @@ impl CleanPlan {
             .iter()
             .any(|candidate| candidate.branch_name == self.current_branch)
     }
+
+    pub(crate) fn deleted_local_count(&self) -> usize {
+        self.candidates
+            .iter()
+            .filter(|candidate| candidate.is_deleted_locally())
+            .count()
+    }
+
+    pub(crate) fn merged_count(&self) -> usize {
+        self.candidates
+            .iter()
+            .filter(|candidate| candidate.is_integrated())
+            .count()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,10 +52,21 @@ pub(crate) struct CleanCandidate {
     pub(crate) depth: usize,
 }
 
+impl CleanCandidate {
+    pub(crate) fn is_deleted_locally(&self) -> bool {
+        matches!(self.reason, CleanReason::DeletedLocally)
+    }
+
+    pub(crate) fn is_integrated(&self) -> bool {
+        matches!(self.reason, CleanReason::IntegratedIntoParent { .. })
+    }
+}
+
 pub(crate) type CleanTreeNode = BranchTreeNode;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CleanReason {
+    DeletedLocally,
     IntegratedIntoParent { parent_branch: String },
 }
 
@@ -66,6 +91,7 @@ pub(crate) struct CleanApplyOutcome {
     pub status: ExitStatus,
     pub switched_to_trunk_from: Option<String>,
     pub restored_original_branch: Option<String>,
+    pub untracked_branches: Vec<String>,
     pub deleted_branches: Vec<String>,
     pub restacked_branches: Vec<RestackPreview>,
     pub failure_output: Option<String>,
@@ -100,6 +126,12 @@ pub(crate) enum CleanEvent {
         branch_name: String,
     },
     DeleteCompleted {
+        branch_name: String,
+    },
+    ArchiveStarted {
+        branch_name: String,
+    },
+    ArchiveCompleted {
         branch_name: String,
     },
 }

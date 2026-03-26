@@ -32,7 +32,7 @@ enum Commands {
     /// Create a new branch from the currently checked out branch and track it in dig
     Branch(branch::BranchArgs),
 
-    /// Clean merged tracked branches and restack their descendants
+    /// Stop tracking missing local branches and clean merged tracked branches
     Clean(clean::CleanArgs),
 
     /// Initialize the current directory as a git repository

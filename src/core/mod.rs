@@ -2,6 +2,7 @@ pub(crate) mod adopt;
 pub(crate) mod branch;
 pub(crate) mod clean;
 pub(crate) mod commit;
+pub(crate) mod deleted_local;
 pub(crate) mod git;
 pub(crate) mod graph;
 pub(crate) mod init;

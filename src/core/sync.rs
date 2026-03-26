@@ -1,15 +1,13 @@
 use std::io;
 use std::process::ExitStatus;
 
-use uuid::Uuid;
-
 use crate::core::clean::{self, CleanOptions};
+use crate::core::deleted_local;
 use crate::core::graph::BranchGraph;
 use crate::core::restack::{self, RestackAction, RestackPreview};
 use crate::core::store::{
-    BranchArchiveReason, ParentRef, PendingOperationKind, PendingOperationState,
-    PendingSyncOperation, PendingSyncPhase, clear_operation, load_operation, open_initialized,
-    record_branch_archived,
+    PendingOperationKind, PendingOperationState, PendingSyncOperation, PendingSyncPhase,
+    clear_operation, load_operation, open_initialized,
 };
 use crate::core::workflow;
 use crate::core::{adopt, commit, git, merge, orphan};
@@ -60,14 +58,6 @@ struct LocalSyncOutcome {
     restacked_branches: Vec<RestackPreview>,
     failure_output: Option<String>,
     paused: bool,
-}
-
-#[derive(Debug)]
-struct DeletedLocalBranchStep {
-    node_id: Uuid,
-    branch_name: String,
-    new_parent_branch_name: String,
-    new_parent: ParentRef,
 }
 
 #[derive(Debug)]
@@ -300,57 +290,19 @@ fn finish_local_sync(
 
 fn plan_deleted_local_branch_step(
     session: &crate::core::store::StoreSession,
-) -> io::Result<Option<DeletedLocalBranchStep>> {
-    let graph = BranchGraph::new(&session.state);
-    let mut missing_nodes = Vec::new();
-
-    for node in session.state.nodes.iter().filter(|node| !node.archived) {
-        if !git::branch_exists(&node.branch_name)? {
-            missing_nodes.push((graph.branch_depth(node.id), node.clone()));
-        }
-    }
-
-    missing_nodes.sort_by(|left, right| {
-        right
-            .0
-            .cmp(&left.0)
-            .then_with(|| left.1.branch_name.cmp(&right.1.branch_name))
-    });
-
-    let Some((_, node)) = missing_nodes.into_iter().next() else {
-        return Ok(None);
-    };
-
-    let (new_parent_branch_name, new_parent) = resolve_replacement_parent(session, &node.parent)?;
-
-    Ok(Some(DeletedLocalBranchStep {
-        node_id: node.id,
-        branch_name: node.branch_name,
-        new_parent_branch_name,
-        new_parent,
-    }))
+) -> io::Result<Option<deleted_local::DeletedLocalBranchStep>> {
+    deleted_local::next_deleted_local_step(&session.state, &session.config.trunk_branch)
 }
 
 fn apply_deleted_local_branch_step(
     session: &mut crate::core::store::StoreSession,
     original_branch: &str,
     progress: &mut LocalSyncProgress,
-    step: DeletedLocalBranchStep,
+    step: deleted_local::DeletedLocalBranchStep,
 ) -> io::Result<Option<LocalSyncOutcome>> {
-    let restack_actions = restack::plan_after_deleted_branch(
-        &session.state,
-        step.node_id,
-        &step.branch_name,
-        &step.new_parent_branch_name,
-        &step.new_parent,
-    )?;
+    let restack_actions = deleted_local::restack_actions_for_step(&session.state, &step)?;
 
-    record_branch_archived(
-        session,
-        step.node_id,
-        step.branch_name.clone(),
-        BranchArchiveReason::DeletedLocally,
-    )?;
+    deleted_local::archive_deleted_local_step(session, &step)?;
     progress.deleted_branches.push(step.branch_name.clone());
 
     execute_sync_restack_step(
@@ -487,38 +439,4 @@ fn execute_sync_restack_step(
     }
 
     Ok(None)
-}
-
-fn resolve_replacement_parent(
-    session: &crate::core::store::StoreSession,
-    parent: &ParentRef,
-) -> io::Result<(String, ParentRef)> {
-    let mut current_parent = parent.clone();
-
-    loop {
-        match current_parent {
-            ParentRef::Trunk => {
-                return Ok((session.config.trunk_branch.clone(), ParentRef::Trunk));
-            }
-            ParentRef::Branch { node_id } => {
-                let parent_node = session
-                    .state
-                    .nodes
-                    .iter()
-                    .find(|node| node.id == node_id)
-                    .ok_or_else(|| io::Error::other("tracked parent branch was not found"))?;
-
-                if !parent_node.archived && git::branch_exists(&parent_node.branch_name)? {
-                    return Ok((
-                        parent_node.branch_name.clone(),
-                        ParentRef::Branch {
-                            node_id: parent_node.id,
-                        },
-                    ));
-                }
-
-                current_parent = parent_node.parent.clone();
-            }
-        }
-    }
 }
