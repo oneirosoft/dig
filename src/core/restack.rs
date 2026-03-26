@@ -212,6 +212,7 @@ pub fn plan_after_deleted_branch(
     )
 }
 
+#[cfg(test)]
 pub fn plan_after_deleted_branch_with_old_upstream_override(
     state: &DigState,
     deleted_node_id: Uuid,
