@@ -110,6 +110,11 @@ Be cautious about:
 
 ## Verification Notes
 
+For formatting, use `rustfmt` from the Rust toolchain managed by `rustup`, not a Homebrew-installed formatter. CI installs `rustfmt` on the stable toolchain and runs `cargo fmt --all --check`, so local verification should use the same toolchain, for example:
+
+- `rustup component add rustfmt`
+- `rustup run stable cargo fmt --all`
+
 Before closing a session that changes behavior:
 
 - run `cargo check`

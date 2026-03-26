@@ -71,7 +71,12 @@ exit 1
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
 
         assert!(stdout.contains("Created pull request #123 for 'feat/auth' into 'main'."));
-        assert_eq!(stdout.matches("https://github.com/acme/dig/pull/123").count(), 1);
+        assert_eq!(
+            stdout
+                .matches("https://github.com/acme/dig/pull/123")
+                .count(),
+            1
+        );
 
         let state = load_state_json(repo);
         let node = find_node(&state, "feat/auth").unwrap();
@@ -135,7 +140,12 @@ exit 1
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
 
         assert!(stdout.contains("Created pull request #234 for 'feat/auth-api' into 'feat/auth'."));
-        assert_eq!(stdout.matches("https://github.com/acme/dig/pull/234").count(), 1);
+        assert_eq!(
+            stdout
+                .matches("https://github.com/acme/dig/pull/234")
+                .count(),
+            1
+        );
 
         let gh_log = fs::read_to_string(log_path).unwrap();
         assert!(gh_log.contains("pr create --base feat/auth"));
@@ -355,7 +365,12 @@ exit 1
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
 
         assert!(stdout.contains("Created pull request #123 for 'feat/auth' into 'main'."));
-        assert_eq!(stdout.matches("https://github.com/acme/dig/pull/123").count(), 1);
+        assert_eq!(
+            stdout
+                .matches("https://github.com/acme/dig/pull/123")
+                .count(),
+            1
+        );
 
         let gh_log = fs::read_to_string(log_path).unwrap();
         assert_eq!(
@@ -410,7 +425,12 @@ exit 1
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
         assert!(stdout.contains("Push it and create the pull request? [y/N]"));
         assert!(stdout.contains("Created pull request #777 for 'feat/auth' into 'main'."));
-        assert_eq!(stdout.matches("https://github.com/acme/dig/pull/777").count(), 1);
+        assert_eq!(
+            stdout
+                .matches("https://github.com/acme/dig/pull/777")
+                .count(),
+            1
+        );
 
         let remote_ref = git_stdout(
             repo,
