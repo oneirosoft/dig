@@ -45,6 +45,12 @@ pub struct CommitMetadata {
     pub body: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchPushTarget {
+    pub remote_name: String,
+    pub branch_name: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct RepoContext {
     pub git_dir: PathBuf,
@@ -331,6 +337,110 @@ pub fn commit_metadata_in_range(range_spec: &str) -> io::Result<Vec<CommitMetada
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
 
     Ok(parse_commit_metadata_records(&stdout))
+}
+
+pub fn branch_push_target_if_needed(branch_name: &str) -> io::Result<Option<BranchPushTarget>> {
+    let Some(remote_name) = resolve_push_remote_name(branch_name)? else {
+        return Ok(None);
+    };
+
+    if branch_head_is_pushed_to_remote(branch_name, &remote_name)? {
+        return Ok(None);
+    }
+
+    Ok(Some(BranchPushTarget {
+        remote_name,
+        branch_name: branch_name.to_string(),
+    }))
+}
+
+pub fn push_branch_to_remote(target: &BranchPushTarget) -> io::Result<GitCommandOutput> {
+    let output = Command::new("git")
+        .args(["push", "-u", &target.remote_name, &target.branch_name])
+        .output()?;
+
+    output_to_git_command_output(output)
+}
+
+fn resolve_push_remote_name(branch_name: &str) -> io::Result<Option<String>> {
+    if let Some(remote_name) = configured_branch_remote_name(branch_name)? {
+        return Ok(Some(remote_name));
+    }
+
+    let remote_names = git_remote_names()?;
+    match remote_names.as_slice() {
+        [] => Ok(None),
+        [remote_name] => Ok(Some(remote_name.clone())),
+        _ if remote_names
+            .iter()
+            .any(|remote_name| remote_name == "origin") =>
+        {
+            Ok(Some("origin".to_string()))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn configured_branch_remote_name(branch_name: &str) -> io::Result<Option<String>> {
+    let key = format!("branch.{branch_name}.remote");
+    let output = Command::new("git")
+        .args(["config", "--get", &key])
+        .output()?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    let remote_name = stdout.trim();
+
+    if remote_name.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(remote_name.to_string()))
+    }
+}
+
+fn git_remote_names() -> io::Result<Vec<String>> {
+    let output = Command::new("git").arg("remote").output()?;
+
+    if !output.status.success() {
+        return Err(git_command_failed(&output));
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+
+    Ok(stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn branch_head_is_pushed_to_remote(branch_name: &str, remote_name: &str) -> io::Result<bool> {
+    let output = Command::new("git")
+        .args([
+            "ls-remote",
+            "--heads",
+            remote_name,
+            &format!("refs/heads/{branch_name}"),
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(git_command_failed(&output));
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    let Some(remote_oid) = stdout.split_whitespace().next() else {
+        return Ok(false);
+    };
+
+    Ok(remote_oid == ref_oid(branch_name)?)
 }
 
 fn run_git_capture_output<const N: usize>(args: [&str; N]) -> io::Result<GitCommandOutput> {

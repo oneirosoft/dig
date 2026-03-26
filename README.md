@@ -68,6 +68,25 @@ Inspect the stack at any time:
 dig tree
 ```
 
+Create or adopt a GitHub pull request for the current tracked branch:
+
+```bash
+dig pr --title "feat: auth" --body "Implements authentication." --draft
+```
+
+Open the current branch's pull request in the browser:
+
+```bash
+dig pr --view
+```
+
+List tracked open pull requests in stack order:
+
+```bash
+dig pr list
+dig pr list --view
+```
+
 ### Common commands
 
 ```bash
@@ -77,6 +96,11 @@ dig branch <name> -p <parent>   # create a tracked branch under a specific paren
 dig tree                        # show the full tracked branch tree
 dig tree --branch <branch>      # show one branch and its descendants
 dig commit -m "message"         # commit and restack tracked descendants if needed
+dig pr                          # create or adopt a GitHub PR for the current tracked branch
+dig pr --title "title" --body "body" --draft
+dig pr --view                   # open the current branch PR in the browser
+dig pr list                     # list open GitHub PRs that dig is tracking
+dig pr list --view              # list tracked PRs, then open them in the browser
 dig sync                        # reconcile local dig state, restack stale stacks, then offer cleanup
 dig sync --continue             # continue a paused restack after resolving conflicts
 dig merge <branch>              # merge a tracked branch into its tracked parent
@@ -104,6 +128,22 @@ Today `dig sync` is local-only. It will:
 If cleanup finds merged branches, `dig sync` reuses the same delete prompt as `dig clean`. If you decline that prompt, sync still succeeds and leaves cleanup for later.
 
 Remote sync is intentionally out of scope for now. Future GitHub and `gh` integration can extend `dig sync`, but the current command only reconciles local branches and local dig state.
+
+### Track GitHub pull requests
+
+`dig pr` uses the GitHub CLI (`gh`) to create a pull request for the current tracked branch, or to adopt the existing open pull request for that branch if one already exists on GitHub.
+
+By default, dig targets the branch's tracked parent as the PR base. Root branches target trunk, child branches target their tracked parent branch, and the tracked PR number is stored locally in `.git/dig/state.json`.
+
+If the branch is not pushed to a resolvable remote yet, `dig pr` prompts before running `git push -u <remote> <branch>` and then continues with PR creation if you confirm.
+
+When dig creates a pull request, it prints both the creation summary and the GitHub link.
+
+`dig tree` annotates tracked branches that have a PR with `(#123)`.
+
+`dig pr --view` opens the current branch's pull request in the browser. If you combine `--view` with a mutating PR command, dig opens the browser after the command completes.
+
+`dig pr list` shows only open pull requests that are both open on GitHub and currently tracked by dig, rendered in dig's stack order. Each line includes `#<number>: <title>` and the GitHub URL.
 
 ### Resolve paused commands
 

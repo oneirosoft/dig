@@ -4,7 +4,8 @@ use uuid::Uuid;
 
 use super::{
     BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchCreatedEvent, BranchNode,
-    BranchReparentedEvent, DigEvent, ParentRef, now_unix_timestamp_secs, save_state,
+    BranchPullRequestTrackedEvent, BranchPullRequestTrackedSource, BranchReparentedEvent, DigEvent,
+    ParentRef, TrackedPullRequest, now_unix_timestamp_secs, save_state,
 };
 use crate::core::store::append_event;
 use crate::core::store::session::StoreSession;
@@ -72,6 +73,29 @@ pub fn record_branch_archived(
             branch_id,
             branch_name,
             reason,
+        }),
+    )
+}
+
+pub fn record_branch_pull_request_tracked(
+    session: &mut StoreSession,
+    branch_id: Uuid,
+    branch_name: String,
+    pull_request: TrackedPullRequest,
+    source: BranchPullRequestTrackedSource,
+) -> io::Result<()> {
+    session
+        .state
+        .track_pull_request(branch_id, pull_request.clone())?;
+    save_state(&session.paths, &session.state)?;
+    append_event(
+        &session.paths,
+        &DigEvent::BranchPullRequestTracked(BranchPullRequestTrackedEvent {
+            occurred_at_unix_secs: now_unix_timestamp_secs(),
+            branch_id,
+            branch_name,
+            pull_request,
+            source,
         }),
     )
 }

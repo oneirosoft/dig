@@ -3,6 +3,7 @@ use std::process::ExitStatus;
 
 use crate::core::git;
 use crate::core::graph::BranchGraph;
+use crate::core::graph::BranchLineageNode;
 use crate::core::store::{StoreInitialization, open_or_initialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -12,7 +13,7 @@ pub struct InitOptions {}
 pub struct InitOutcome {
     pub status: ExitStatus,
     pub created_git_repo: bool,
-    pub lineage: Vec<String>,
+    pub lineage: Vec<BranchLineageNode>,
     pub store_initialization: StoreInitialization,
 }
 
@@ -43,7 +44,7 @@ pub fn run(_: &InitOptions) -> io::Result<InitOutcome> {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::graph::BranchGraph;
+    use crate::core::graph::{BranchGraph, BranchLineageNode};
     use crate::core::store::StoreInitialization;
     use crate::core::store::types::DigState;
     use std::process::{Command, Stdio};
@@ -63,6 +64,12 @@ mod tests {
         };
 
         assert!(outcome.created_git_repo);
-        assert_eq!(outcome.lineage, vec!["main".to_string()]);
+        assert_eq!(
+            outcome.lineage,
+            vec![BranchLineageNode {
+                branch_name: "main".to_string(),
+                pull_request_number: None,
+            }]
+        );
     }
 }

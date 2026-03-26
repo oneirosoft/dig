@@ -421,6 +421,7 @@ mod tests {
                         fork_point_oid: "root".into(),
                         head_oid_at_creation: "root".into(),
                         created_at_unix_secs: 1,
+                        pull_request: None,
                         archived: false,
                     },
                     BranchNode {
@@ -431,6 +432,7 @@ mod tests {
                         fork_point_oid: "auth".into(),
                         head_oid_at_creation: "auth".into(),
                         created_at_unix_secs: 2,
+                        pull_request: None,
                         archived: false,
                     },
                     BranchNode {
@@ -441,6 +443,7 @@ mod tests {
                         fork_point_oid: "api".into(),
                         head_oid_at_creation: "api".into(),
                         created_at_unix_secs: 3,
+                        pull_request: None,
                         archived: false,
                     },
                 ],
@@ -504,6 +507,7 @@ mod tests {
                         fork_point_oid: "root".into(),
                         head_oid_at_creation: "root".into(),
                         created_at_unix_secs: 1,
+                        pull_request: None,
                         archived: false,
                     },
                     BranchNode {
@@ -514,6 +518,7 @@ mod tests {
                         fork_point_oid: "auth".into(),
                         head_oid_at_creation: "auth".into(),
                         created_at_unix_secs: 2,
+                        pull_request: None,
                         archived: false,
                     },
                     BranchNode {
@@ -524,6 +529,7 @@ mod tests {
                         fork_point_oid: "api".into(),
                         head_oid_at_creation: "api".into(),
                         created_at_unix_secs: 3,
+                        pull_request: None,
                         archived: false,
                     },
                     BranchNode {
@@ -534,6 +540,7 @@ mod tests {
                         fork_point_oid: "platform-root".into(),
                         head_oid_at_creation: "platform-root".into(),
                         created_at_unix_secs: 4,
+                        pull_request: None,
                         archived: false,
                     },
                 ],

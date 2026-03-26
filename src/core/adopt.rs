@@ -181,6 +181,7 @@ pub fn apply(plan: &AdoptPlan) -> io::Result<AdoptOutcome> {
         fork_point_oid: parent_head_oid,
         head_oid_at_creation: branch_head_oid,
         created_at_unix_secs: now_unix_timestamp_secs(),
+        pull_request: None,
         archived: false,
     };
 
@@ -263,6 +264,7 @@ pub(crate) fn resume_after_sync(
         fork_point_oid: parent_head_oid,
         head_oid_at_creation: branch_head_oid,
         created_at_unix_secs: now_unix_timestamp_secs(),
+        pull_request: None,
         archived: false,
     };
 

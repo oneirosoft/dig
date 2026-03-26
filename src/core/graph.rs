@@ -12,6 +12,12 @@ pub struct BranchTreeNode {
     pub children: Vec<BranchTreeNode>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchLineageNode {
+    pub branch_name: String,
+    pub pull_request_number: Option<u64>,
+}
+
 pub struct BranchGraph<'a> {
     state: &'a DigState,
 }
@@ -21,18 +27,27 @@ impl<'a> BranchGraph<'a> {
         Self { state }
     }
 
-    pub fn lineage(&self, branch_name: &str, trunk_branch: &str) -> Vec<String> {
+    pub fn lineage(&self, branch_name: &str, trunk_branch: &str) -> Vec<BranchLineageNode> {
         let Some(mut current_node) = self.state.find_branch_by_name(branch_name) else {
-            return vec![branch_name.to_string()];
+            return vec![BranchLineageNode {
+                branch_name: branch_name.to_string(),
+                pull_request_number: None,
+            }];
         };
 
-        let mut lineage = vec![current_node.branch_name.clone()];
+        let mut lineage = vec![BranchLineageNode {
+            branch_name: current_node.branch_name.clone(),
+            pull_request_number: current_node.pull_request.as_ref().map(|pr| pr.number),
+        }];
 
         loop {
             match &current_node.parent {
                 ParentRef::Trunk => {
                     if current_node.branch_name != trunk_branch {
-                        lineage.push(trunk_branch.to_string());
+                        lineage.push(BranchLineageNode {
+                            branch_name: trunk_branch.to_string(),
+                            pull_request_number: None,
+                        });
                     }
                     break;
                 }
@@ -41,7 +56,10 @@ impl<'a> BranchGraph<'a> {
                         break;
                     };
 
-                    lineage.push(parent_node.branch_name.clone());
+                    lineage.push(BranchLineageNode {
+                        branch_name: parent_node.branch_name.clone(),
+                        pull_request_number: parent_node.pull_request.as_ref().map(|pr| pr.number),
+                    });
                     current_node = parent_node;
                 }
             }
@@ -141,9 +159,9 @@ impl<'a> BranchGraph<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BranchGraph, BranchTreeNode};
+    use super::{BranchGraph, BranchLineageNode, BranchTreeNode};
     use crate::core::store::types::{DIG_STATE_VERSION, DigState};
-    use crate::core::store::{BranchNode, ParentRef};
+    use crate::core::store::{BranchNode, ParentRef, TrackedPullRequest};
     use uuid::Uuid;
 
     fn fixture_state() -> (DigState, Uuid, Uuid, Uuid) {
@@ -163,6 +181,7 @@ mod tests {
                         fork_point_oid: "abc123".into(),
                         head_oid_at_creation: "abc123".into(),
                         created_at_unix_secs: 1,
+                        pull_request: Some(TrackedPullRequest { number: 42 }),
                         archived: false,
                     },
                     BranchNode {
@@ -173,6 +192,7 @@ mod tests {
                         fork_point_oid: "def456".into(),
                         head_oid_at_creation: "def456".into(),
                         created_at_unix_secs: 2,
+                        pull_request: None,
                         archived: false,
                     },
                     BranchNode {
@@ -183,6 +203,7 @@ mod tests {
                         fork_point_oid: "fedcba".into(),
                         head_oid_at_creation: "fedcba".into(),
                         created_at_unix_secs: 3,
+                        pull_request: None,
                         archived: false,
                     },
                 ],
@@ -201,9 +222,18 @@ mod tests {
         assert_eq!(
             graph.lineage("feature/api-followup", "main"),
             vec![
-                "feature/api-followup".to_string(),
-                "feature/api".to_string(),
-                "main".to_string()
+                BranchLineageNode {
+                    branch_name: "feature/api-followup".to_string(),
+                    pull_request_number: None,
+                },
+                BranchLineageNode {
+                    branch_name: "feature/api".to_string(),
+                    pull_request_number: Some(42),
+                },
+                BranchLineageNode {
+                    branch_name: "main".to_string(),
+                    pull_request_number: None,
+                }
             ]
         );
     }

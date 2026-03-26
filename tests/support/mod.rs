@@ -5,6 +5,9 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -76,17 +79,32 @@ pub fn write_file(repo: &Path, file_name: &str, contents: &str) {
 }
 
 pub fn dig(repo: &Path, args: &[&str]) -> Output {
+    dig_with_env(repo, args, &[])
+}
+
+pub fn dig_with_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_dig"))
         .current_dir(repo)
         .args(args)
+        .envs(envs.iter().copied())
         .output()
         .unwrap()
 }
 
 pub fn dig_with_input(repo: &Path, args: &[&str], input: &str) -> Output {
+    dig_with_input_and_env(repo, args, input, &[])
+}
+
+pub fn dig_with_input_and_env(
+    repo: &Path,
+    args: &[&str],
+    input: &str,
+    envs: &[(&str, &str)],
+) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_dig"))
         .current_dir(repo)
         .args(args)
+        .envs(envs.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -104,7 +122,11 @@ pub fn dig_with_input(repo: &Path, args: &[&str], input: &str) -> Output {
 }
 
 pub fn dig_ok(repo: &Path, args: &[&str]) -> Output {
-    let output = dig(repo, args);
+    dig_ok_with_env(repo, args, &[])
+}
+
+pub fn dig_ok_with_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
+    let output = dig_with_env(repo, args, envs);
     assert!(
         output.status.success(),
         "dig {:?} failed\nstdout:\n{}\nstderr:\n{}",
@@ -133,6 +155,34 @@ pub fn git_stdout(repo: &Path, args: &[&str]) -> String {
         .unwrap();
 
     assert!(output.status.success(), "git {:?} failed", args);
+
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+pub fn install_fake_executable(bin_dir: &Path, name: &str, script: &str) {
+    fs::create_dir_all(bin_dir).unwrap();
+    let path = bin_dir.join(name);
+    fs::write(&path, script).unwrap();
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+}
+
+pub fn path_with_prepend(dir: &Path) -> String {
+    let existing_path = std::env::var("PATH").unwrap_or_default();
+    if existing_path.is_empty() {
+        dir.display().to_string()
+    } else {
+        format!("{}:{existing_path}", dir.display())
+    }
+}
+
+pub fn git_binary_path() -> String {
+    let output = Command::new("which").arg("git").output().unwrap();
+    assert!(output.status.success(), "which git failed");
 
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }

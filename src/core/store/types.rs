@@ -99,6 +99,20 @@ impl DigState {
 
         Ok((old_parent, old_base_ref))
     }
+
+    pub fn track_pull_request(
+        &mut self,
+        node_id: Uuid,
+        pull_request: TrackedPullRequest,
+    ) -> io::Result<()> {
+        let node = self.find_branch_by_id_mut(node_id).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "tracked branch was not found")
+        })?;
+
+        node.pull_request = Some(pull_request);
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,7 +294,14 @@ pub struct BranchNode {
     pub fork_point_oid: String,
     pub head_oid_at_creation: String,
     pub created_at_unix_secs: u64,
+    #[serde(default)]
+    pub pull_request: Option<TrackedPullRequest>,
     pub archived: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackedPullRequest {
+    pub number: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -297,6 +318,7 @@ pub enum DigEvent {
     BranchAdopted(BranchAdoptedEvent),
     BranchArchived(BranchArchivedEvent),
     BranchReparented(BranchReparentedEvent),
+    BranchPullRequestTracked(BranchPullRequestTrackedEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -338,6 +360,22 @@ pub struct BranchReparentedEvent {
     pub new_base_ref: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchPullRequestTrackedSource {
+    Created,
+    Adopted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchPullRequestTrackedEvent {
+    pub occurred_at_unix_secs: u64,
+    pub branch_id: Uuid,
+    pub branch_name: String,
+    pub pull_request: TrackedPullRequest,
+    pub source: BranchPullRequestTrackedSource,
+}
+
 pub fn now_unix_timestamp_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -348,10 +386,11 @@ pub fn now_unix_timestamp_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchNode, DigConfig,
-        DigEvent, DigState, ParentRef, PendingCommitOperation, PendingOperationKind,
-        PendingOperationState, PendingOrphanOperation, PendingReparentOperation,
-        PendingSyncOperation, PendingSyncPhase,
+        BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchNode,
+        BranchPullRequestTrackedEvent, BranchPullRequestTrackedSource, DigConfig, DigEvent,
+        DigState, ParentRef, PendingCommitOperation, PendingOperationKind, PendingOperationState,
+        PendingOrphanOperation, PendingReparentOperation, PendingSyncOperation, PendingSyncPhase,
+        TrackedPullRequest,
     };
     use crate::core::restack::RestackAction;
     use uuid::Uuid;
@@ -366,6 +405,7 @@ mod tests {
             fork_point_oid: "abc123".into(),
             head_oid_at_creation: "abc123".into(),
             created_at_unix_secs: 1,
+            pull_request: None,
             archived: false,
         };
 
@@ -424,6 +464,7 @@ mod tests {
                 fork_point_oid: "abc123".into(),
                 head_oid_at_creation: "def456".into(),
                 created_at_unix_secs: 1,
+                pull_request: None,
                 archived: false,
             },
         });
@@ -432,6 +473,42 @@ mod tests {
 
         assert!(serialized.contains("\"type\":\"branch_adopted\""));
         assert!(serialized.contains("\"branch_name\":\"feature/api\""));
+    }
+
+    #[test]
+    fn serializes_branch_pull_request_tracked_event() {
+        let event = DigEvent::BranchPullRequestTracked(BranchPullRequestTrackedEvent {
+            occurred_at_unix_secs: 1,
+            branch_id: Uuid::nil(),
+            branch_name: "feature/api".into(),
+            pull_request: TrackedPullRequest { number: 123 },
+            source: BranchPullRequestTrackedSource::Created,
+        });
+
+        let serialized = serde_json::to_string(&event).unwrap();
+
+        assert!(serialized.contains("\"type\":\"branch_pull_request_tracked\""));
+        assert!(serialized.contains("\"source\":\"created\""));
+        assert!(serialized.contains("\"number\":123"));
+    }
+
+    #[test]
+    fn deserializes_legacy_branch_node_without_pull_request() {
+        let node = serde_json::from_str::<BranchNode>(
+            r#"{
+                "id":"00000000-0000-0000-0000-000000000000",
+                "branch_name":"feature/api",
+                "parent":{"kind":"trunk"},
+                "base_ref":"main",
+                "fork_point_oid":"abc123",
+                "head_oid_at_creation":"abc123",
+                "created_at_unix_secs":1,
+                "archived":false
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(node.pull_request, None);
     }
 
     #[test]

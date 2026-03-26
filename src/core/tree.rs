@@ -17,12 +17,14 @@ pub struct TreeOptions {
 pub struct TreeLabel {
     pub branch_name: String,
     pub is_current: bool,
+    pub pull_request_number: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TreeNode {
     pub branch_name: String,
     pub is_current: bool,
+    pub pull_request_number: Option<u64>,
     pub children: Vec<TreeNode>,
 }
 
@@ -97,6 +99,7 @@ fn build_tree_view(state: &DigState, trunk_branch: &str, current_branch: Option<
         root_label: Some(TreeLabel {
             branch_name: trunk_branch.to_string(),
             is_current: current_branch == Some(trunk_branch),
+            pull_request_number: None,
         }),
         roots: root_nodes
             .into_iter()
@@ -142,6 +145,7 @@ fn filter_tree_view(view: TreeView, requested_branch: Option<&str>) -> io::Resul
         root_label: Some(TreeLabel {
             branch_name: selected_node.branch_name.clone(),
             is_current: selected_node.is_current,
+            pull_request_number: selected_node.pull_request_number,
         }),
         roots: selected_node.children.clone(),
     })
@@ -205,6 +209,7 @@ fn build_tree_node(
     TreeNode {
         branch_name: node.branch_name.clone(),
         is_current: current_branch == Some(node.branch_name.as_str()),
+        pull_request_number: node.pull_request.as_ref().map(|pr| pr.number),
         children,
     }
 }
@@ -228,6 +233,7 @@ fn prune_to_branch_path(node: &TreeNode, branch_name: &str) -> Option<TreeNode> 
         prune_to_branch_path(child, branch_name).map(|pruned_child| TreeNode {
             branch_name: node.branch_name.clone(),
             is_current: node.is_current,
+            pull_request_number: node.pull_request_number,
             children: vec![pruned_child],
         })
     })
@@ -290,6 +296,7 @@ mod tests {
                     fork_point_oid: "1".into(),
                     head_oid_at_creation: "1".into(),
                     created_at_unix_secs: 1,
+                    pull_request: Some(crate::core::store::TrackedPullRequest { number: 101 }),
                     archived: false,
                 },
                 BranchNode {
@@ -300,6 +307,7 @@ mod tests {
                     fork_point_oid: "2".into(),
                     head_oid_at_creation: "2".into(),
                     created_at_unix_secs: 2,
+                    pull_request: Some(crate::core::store::TrackedPullRequest { number: 102 }),
                     archived: false,
                 },
                 BranchNode {
@@ -310,6 +318,7 @@ mod tests {
                     fork_point_oid: "3".into(),
                     head_oid_at_creation: "3".into(),
                     created_at_unix_secs: 3,
+                    pull_request: None,
                     archived: false,
                 },
             ],
@@ -321,20 +330,24 @@ mod tests {
                 root_label: Some(TreeLabel {
                     branch_name: "main".into(),
                     is_current: false,
+                    pull_request_number: None,
                 }),
                 roots: vec![
                     TreeNode {
                         branch_name: "feat/auth".into(),
                         is_current: false,
+                        pull_request_number: Some(101),
                         children: vec![TreeNode {
                             branch_name: "feat/auth-api".into(),
                             is_current: true,
+                            pull_request_number: Some(102),
                             children: vec![],
                         }],
                     },
                     TreeNode {
                         branch_name: "feat/billing".into(),
                         is_current: false,
+                        pull_request_number: None,
                         children: vec![],
                     },
                 ],
@@ -348,23 +361,28 @@ mod tests {
             root_label: Some(TreeLabel {
                 branch_name: "main".into(),
                 is_current: false,
+                pull_request_number: None,
             }),
             roots: vec![TreeNode {
                 branch_name: "feat/auth".into(),
                 is_current: false,
+                pull_request_number: Some(101),
                 children: vec![
                     TreeNode {
                         branch_name: "feat/auth-api".into(),
                         is_current: false,
+                        pull_request_number: Some(102),
                         children: vec![TreeNode {
                             branch_name: "feat/auth-api-tests".into(),
                             is_current: false,
+                            pull_request_number: Some(103),
                             children: vec![],
                         }],
                     },
                     TreeNode {
                         branch_name: "feat/auth-ui".into(),
                         is_current: true,
+                        pull_request_number: None,
                         children: vec![],
                     },
                 ],
@@ -377,20 +395,24 @@ mod tests {
                 root_label: Some(TreeLabel {
                     branch_name: "feat/auth".into(),
                     is_current: false,
+                    pull_request_number: Some(101),
                 }),
                 roots: vec![
                     TreeNode {
                         branch_name: "feat/auth-api".into(),
                         is_current: false,
+                        pull_request_number: Some(102),
                         children: vec![TreeNode {
                             branch_name: "feat/auth-api-tests".into(),
                             is_current: false,
+                            pull_request_number: Some(103),
                             children: vec![],
                         }],
                     },
                     TreeNode {
                         branch_name: "feat/auth-ui".into(),
                         is_current: true,
+                        pull_request_number: None,
                         children: vec![],
                     },
                 ],
@@ -404,24 +426,29 @@ mod tests {
             root_label: Some(TreeLabel {
                 branch_name: "main".into(),
                 is_current: false,
+                pull_request_number: None,
             }),
             roots: vec![
                 TreeNode {
                     branch_name: "feat/auth".into(),
                     is_current: false,
+                    pull_request_number: Some(101),
                     children: vec![
                         TreeNode {
                             branch_name: "feat/auth-api".into(),
                             is_current: false,
+                            pull_request_number: Some(102),
                             children: vec![TreeNode {
                                 branch_name: "feat/auth-api-tests".into(),
                                 is_current: false,
+                                pull_request_number: Some(103),
                                 children: vec![],
                             }],
                         },
                         TreeNode {
                             branch_name: "feat/auth-ui".into(),
                             is_current: false,
+                            pull_request_number: None,
                             children: vec![],
                         },
                     ],
@@ -429,6 +456,7 @@ mod tests {
                 TreeNode {
                     branch_name: "feat/billing".into(),
                     is_current: false,
+                    pull_request_number: None,
                     children: vec![],
                 },
             ],
@@ -440,16 +468,20 @@ mod tests {
                 root_label: Some(TreeLabel {
                     branch_name: "main".into(),
                     is_current: false,
+                    pull_request_number: None,
                 }),
                 roots: vec![TreeNode {
                     branch_name: "feat/auth".into(),
                     is_current: false,
+                    pull_request_number: Some(101),
                     children: vec![TreeNode {
                         branch_name: "feat/auth-api".into(),
                         is_current: true,
+                        pull_request_number: Some(102),
                         children: vec![TreeNode {
                             branch_name: "feat/auth-api-tests".into(),
                             is_current: false,
+                            pull_request_number: Some(103),
                             children: vec![],
                         }],
                     }],

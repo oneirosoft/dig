@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::core::git;
 use crate::core::graph::BranchGraph;
+use crate::core::graph::BranchLineageNode;
 use crate::core::store::types::DigState;
 use crate::core::store::{
     BranchNode, DigConfig, ParentRef, now_unix_timestamp_secs, open_or_initialize,
@@ -21,7 +22,7 @@ pub struct BranchOptions {
 pub struct BranchOutcome {
     pub status: ExitStatus,
     pub created_node: Option<BranchNode>,
-    pub lineage: Vec<String>,
+    pub lineage: Vec<BranchLineageNode>,
 }
 
 pub fn run(options: &BranchOptions) -> io::Result<BranchOutcome> {
@@ -78,6 +79,7 @@ pub fn run(options: &BranchOptions) -> io::Result<BranchOutcome> {
         fork_point_oid: parent_head_oid.clone(),
         head_oid_at_creation: parent_head_oid,
         created_at_unix_secs: now_unix_timestamp_secs(),
+        pull_request: None,
         archived: false,
     };
 
@@ -87,7 +89,10 @@ pub fn run(options: &BranchOptions) -> io::Result<BranchOutcome> {
         return Ok(BranchOutcome {
             status,
             created_node: None,
-            lineage: vec![branch_name.to_string()],
+            lineage: vec![BranchLineageNode {
+                branch_name: branch_name.to_string(),
+                pull_request_number: None,
+            }],
         });
     }
 
@@ -181,6 +186,7 @@ mod tests {
                 fork_point_oid: "abc123".into(),
                 head_oid_at_creation: "abc123".into(),
                 created_at_unix_secs: 1,
+                pull_request: None,
                 archived: false,
             }],
         };
