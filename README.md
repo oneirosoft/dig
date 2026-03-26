@@ -23,6 +23,13 @@ cargo install --path .
 
 If you do not install it, replace `dig ...` in the examples below with `cargo run -- ...`.
 
+For formatting, use `rustfmt` from the Rust toolchain managed by `rustup`, not a Homebrew-installed `rustfmt`. CI installs `rustfmt` through `rustup` on the stable toolchain and runs `cargo fmt --all --check`, so the safest local command is:
+
+```bash
+rustup component add rustfmt
+cargo +stable fmt --all
+```
+
 ### Initialize dig
 
 Run `dig init` in the repository you want to manage:
