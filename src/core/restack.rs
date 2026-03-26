@@ -124,6 +124,42 @@ pub fn plan_after_branch_rebase(
     Ok(actions)
 }
 
+pub fn plan_after_branch_reparent(
+    state: &DigState,
+    node_id: Uuid,
+    branch_name: &str,
+    current_parent_branch_name: &str,
+    new_parent_branch_name: &str,
+    new_parent: &ParentRef,
+) -> io::Result<Vec<RestackAction>> {
+    load_active_branch_node(state, node_id)?;
+
+    let old_upstream_oid = git::merge_base(current_parent_branch_name, branch_name)?;
+    let old_head_oid = git::ref_oid(branch_name)?;
+    let mut actions = vec![RestackAction {
+        node_id,
+        branch_name: branch_name.to_string(),
+        old_upstream_branch_name: current_parent_branch_name.to_string(),
+        old_upstream_oid,
+        new_base_branch_name: new_parent_branch_name.to_string(),
+        new_parent: Some(new_parent.clone()),
+    }];
+
+    let graph = BranchGraph::new(state);
+    for child_id in graph.active_children_ids(node_id) {
+        collect_branch_advance_actions(
+            state,
+            child_id,
+            branch_name,
+            &old_head_oid,
+            branch_name,
+            &mut actions,
+        )?;
+    }
+
+    Ok(actions)
+}
+
 pub fn plan_after_deleted_branch(
     state: &DigState,
     deleted_node_id: Uuid,
@@ -317,7 +353,9 @@ fn load_active_branch_node(
 
 #[cfg(test)]
 mod tests {
-    use super::{RestackAction, plan_after_branch_advance, previews_for_actions};
+    use super::{
+        RestackAction, plan_after_branch_advance, plan_after_branch_reparent, previews_for_actions,
+    };
     use crate::core::git;
     use crate::core::store::types::DIG_STATE_VERSION;
     use crate::core::store::{BranchNode, ParentRef};
@@ -421,6 +459,115 @@ mod tests {
             assert_eq!(planned[0].new_parent, None);
 
             assert_eq!(planned[1].node_id, grandchild_id);
+            assert_eq!(planned[1].branch_name, "feat/auth-api-tests");
+            assert_eq!(planned[1].old_upstream_branch_name, "feat/auth-api");
+            assert_eq!(
+                planned[1].old_upstream_oid,
+                git::ref_oid("feat/auth-api").unwrap()
+            );
+            assert_eq!(planned[1].new_base_branch_name, "feat/auth-api");
+            assert_eq!(planned[1].new_parent, None);
+        });
+    }
+
+    #[test]
+    fn plans_restack_after_branch_reparent_with_parent_change_only_on_target_branch() {
+        with_temp_repo("dig-restack", |repo| {
+            initialize_main_repo(repo);
+            git_ok(repo, &["checkout", "-b", "feat/auth"]);
+            commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+            git_ok(repo, &["checkout", "-b", "feat/auth-api"]);
+            commit_file(repo, "auth-api.txt", "api\n", "feat: auth api");
+            git_ok(repo, &["checkout", "-b", "feat/auth-api-tests"]);
+            commit_file(
+                repo,
+                "auth-api-tests.txt",
+                "tests\n",
+                "feat: auth api tests",
+            );
+            git_ok(repo, &["checkout", "main"]);
+            git_ok(repo, &["checkout", "-b", "feat/platform"]);
+            commit_file(repo, "platform.txt", "platform\n", "feat: platform");
+
+            let auth_id = Uuid::new_v4();
+            let api_id = Uuid::new_v4();
+            let tests_id = Uuid::new_v4();
+            let platform_id = Uuid::new_v4();
+            let state = crate::core::store::types::DigState {
+                version: DIG_STATE_VERSION,
+                nodes: vec![
+                    BranchNode {
+                        id: auth_id,
+                        branch_name: "feat/auth".into(),
+                        parent: ParentRef::Trunk,
+                        base_ref: "main".into(),
+                        fork_point_oid: "root".into(),
+                        head_oid_at_creation: "root".into(),
+                        created_at_unix_secs: 1,
+                        archived: false,
+                    },
+                    BranchNode {
+                        id: api_id,
+                        branch_name: "feat/auth-api".into(),
+                        parent: ParentRef::Branch { node_id: auth_id },
+                        base_ref: "feat/auth".into(),
+                        fork_point_oid: "auth".into(),
+                        head_oid_at_creation: "auth".into(),
+                        created_at_unix_secs: 2,
+                        archived: false,
+                    },
+                    BranchNode {
+                        id: tests_id,
+                        branch_name: "feat/auth-api-tests".into(),
+                        parent: ParentRef::Branch { node_id: api_id },
+                        base_ref: "feat/auth-api".into(),
+                        fork_point_oid: "api".into(),
+                        head_oid_at_creation: "api".into(),
+                        created_at_unix_secs: 3,
+                        archived: false,
+                    },
+                    BranchNode {
+                        id: platform_id,
+                        branch_name: "feat/platform".into(),
+                        parent: ParentRef::Trunk,
+                        base_ref: "main".into(),
+                        fork_point_oid: "platform-root".into(),
+                        head_oid_at_creation: "platform-root".into(),
+                        created_at_unix_secs: 4,
+                        archived: false,
+                    },
+                ],
+            };
+
+            let planned = plan_after_branch_reparent(
+                &state,
+                api_id,
+                "feat/auth-api",
+                "feat/auth",
+                "feat/platform",
+                &ParentRef::Branch {
+                    node_id: platform_id,
+                },
+            )
+            .unwrap();
+
+            assert_eq!(planned.len(), 2);
+            assert_eq!(planned[0].node_id, api_id);
+            assert_eq!(planned[0].branch_name, "feat/auth-api");
+            assert_eq!(planned[0].old_upstream_branch_name, "feat/auth");
+            assert_eq!(
+                planned[0].old_upstream_oid,
+                git::merge_base("feat/auth", "feat/auth-api").unwrap()
+            );
+            assert_eq!(planned[0].new_base_branch_name, "feat/platform");
+            assert_eq!(
+                planned[0].new_parent,
+                Some(ParentRef::Branch {
+                    node_id: platform_id,
+                })
+            );
+
+            assert_eq!(planned[1].node_id, tests_id);
             assert_eq!(planned[1].branch_name, "feat/auth-api-tests");
             assert_eq!(planned[1].old_upstream_branch_name, "feat/auth-api");
             assert_eq!(

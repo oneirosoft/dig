@@ -10,7 +10,7 @@ use crate::core::store::{
     clear_operation, load_operation, open_initialized,
 };
 use crate::core::workflow;
-use crate::core::{adopt, commit, git, merge, orphan};
+use crate::core::{adopt, commit, git, merge, orphan, reparent};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SyncOptions {
@@ -27,6 +27,7 @@ pub enum SyncCompletion {
         outcome: clean::CleanApplyOutcome,
     },
     Orphan(orphan::OrphanOutcome),
+    Reparent(reparent::ReparentOutcome),
     Full(FullSyncOutcome),
 }
 
@@ -154,6 +155,18 @@ pub fn run(options: &SyncOptions) -> io::Result<SyncOutcome> {
             Ok(SyncOutcome {
                 status,
                 completion: Some(SyncCompletion::Orphan(outcome)),
+                failure_output,
+                paused,
+            })
+        }
+        crate::core::store::PendingOperationKind::Reparent(payload) => {
+            let outcome = reparent::resume_after_sync(pending_operation, payload)?;
+            let status = outcome.status;
+            let failure_output = outcome.failure_output.clone();
+            let paused = outcome.paused;
+            Ok(SyncOutcome {
+                status,
+                completion: Some(SyncCompletion::Reparent(outcome)),
                 failure_output,
                 paused,
             })

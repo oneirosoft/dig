@@ -165,6 +165,7 @@ pub enum PendingOperationKind {
     Merge(PendingMergeOperation),
     Clean(PendingCleanOperation),
     Orphan(PendingOrphanOperation),
+    Reparent(PendingReparentOperation),
     Sync(PendingSyncOperation),
 }
 
@@ -176,6 +177,7 @@ impl PendingOperationKind {
             Self::Merge(_) => "merge",
             Self::Clean(_) => "clean",
             Self::Orphan(_) => "orphan",
+            Self::Reparent(_) => "reparent",
             Self::Sync(_) => "sync",
         }
     }
@@ -236,6 +238,13 @@ pub struct PendingOrphanOperation {
     pub branch_name: String,
     pub parent_branch_name: String,
     pub node_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingReparentOperation {
+    pub original_branch: String,
+    pub branch_name: String,
+    pub parent_branch_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,7 +350,8 @@ mod tests {
     use super::{
         BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchNode, DigConfig,
         DigEvent, DigState, ParentRef, PendingCommitOperation, PendingOperationKind,
-        PendingOperationState, PendingOrphanOperation, PendingSyncOperation, PendingSyncPhase,
+        PendingOperationState, PendingOrphanOperation, PendingReparentOperation,
+        PendingSyncOperation, PendingSyncPhase,
     };
     use crate::core::restack::RestackAction;
     use uuid::Uuid;
@@ -489,6 +499,17 @@ mod tests {
         });
 
         assert_eq!(operation.command_name(), "sync");
+    }
+
+    #[test]
+    fn reports_reparent_operation_command_name() {
+        let operation = PendingOperationKind::Reparent(PendingReparentOperation {
+            original_branch: "feature/main".into(),
+            branch_name: "feature/api".into(),
+            parent_branch_name: "feature/platform".into(),
+        });
+
+        assert_eq!(operation.command_name(), "reparent");
     }
 
     #[test]

@@ -56,6 +56,12 @@ git add .
 dig commit -m "feat: auth ui"
 ```
 
+Move a tracked branch under a different tracked parent:
+
+```bash
+dig reparent feat/auth-ui -p main
+```
+
 Inspect the stack at any time:
 
 ```bash
@@ -76,6 +82,8 @@ dig sync --continue             # continue a paused restack after resolving conf
 dig merge <branch>              # merge a tracked branch into its tracked parent
 dig clean                       # stop tracking missing local branches and remove merged tracked branches
 dig adopt <branch> -p <parent>  # start tracking an existing local branch
+dig reparent -p <parent>        # reparent the current tracked branch onto a new parent
+dig reparent <branch> -p <parent> # reparent a named tracked branch onto a new parent
 dig orphan <branch>             # stop tracking a branch but keep the local branch
 ```
 
@@ -99,7 +107,7 @@ Remote sync is intentionally out of scope for now. Future GitHub and `gh` integr
 
 ### Resolve paused commands
 
-Some commands, including `dig commit`, `dig adopt`, `dig merge`, `dig clean`, `dig orphan`, and `dig sync`, may pause if `dig` hits a rebase conflict while restacking tracked descendants.
+Some commands, including `dig commit`, `dig adopt`, `dig reparent`, `dig merge`, `dig clean`, `dig orphan`, and `dig sync`, may pause if `dig` hits a rebase conflict while restacking tracked descendants.
 
 When that happens:
 

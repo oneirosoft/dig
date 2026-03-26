@@ -8,6 +8,7 @@ pub(crate) mod graph;
 pub(crate) mod init;
 pub(crate) mod merge;
 pub(crate) mod orphan;
+pub(crate) mod reparent;
 pub(crate) mod restack;
 pub(crate) mod store;
 pub(crate) mod sync;

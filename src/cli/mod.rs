@@ -7,6 +7,7 @@ mod init;
 mod merge;
 mod operation;
 mod orphan;
+mod reparent;
 mod sync;
 mod tree;
 
@@ -47,6 +48,9 @@ enum Commands {
     /// Stop tracking a branch in dig while keeping the local branch
     Orphan(orphan::OrphanArgs),
 
+    /// Change a tracked branch's parent and restack it onto the new base
+    Reparent(reparent::ReparentArgs),
+
     /// Continue a paused restack sequence
     Sync(sync::SyncArgs),
 
@@ -70,6 +74,7 @@ pub fn run() -> ExitCode {
         Commands::Commit(args) => commit::execute(args),
         Commands::Merge(args) => merge::execute(args),
         Commands::Orphan(args) => orphan::execute(args),
+        Commands::Reparent(args) => reparent::execute(args),
         Commands::Sync(args) => sync::execute(args),
         Commands::Tree(args) => tree::execute(args),
     };

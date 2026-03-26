@@ -44,7 +44,7 @@ mod tests {
     use crate::core::store::dig_paths;
     use crate::core::store::{
         ParentRef, PendingCommitOperation, PendingOperationKind, PendingOperationState,
-        PendingSyncOperation, PendingSyncPhase,
+        PendingReparentOperation, PendingSyncOperation, PendingSyncPhase,
     };
 
     #[test]
@@ -129,6 +129,36 @@ mod tests {
                 old_upstream_oid: "old".into(),
                 new_base_branch_name: "main".into(),
                 new_parent: None,
+            }],
+        )
+        .unwrap();
+
+        save_operation(&paths, &operation).unwrap();
+
+        assert_eq!(load_operation(&paths).unwrap(), Some(operation));
+
+        fs::remove_dir_all(git_dir).unwrap();
+    }
+
+    #[test]
+    fn saves_and_loads_pending_reparent_operation() {
+        let git_dir = std::env::temp_dir().join(format!("dig-operation-{}", Uuid::new_v4()));
+        fs::create_dir_all(&git_dir).unwrap();
+
+        let paths = dig_paths(&git_dir);
+        let operation = PendingOperationState::start(
+            PendingOperationKind::Reparent(PendingReparentOperation {
+                original_branch: "feat/current".into(),
+                branch_name: "feat/auth".into(),
+                parent_branch_name: "feat/platform".into(),
+            }),
+            vec![RestackAction {
+                node_id: Uuid::new_v4(),
+                branch_name: "feat/auth".into(),
+                old_upstream_branch_name: "main".into(),
+                old_upstream_oid: "old".into(),
+                new_base_branch_name: "feat/platform".into(),
+                new_parent: Some(ParentRef::Trunk),
             }],
         )
         .unwrap();

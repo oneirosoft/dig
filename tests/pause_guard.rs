@@ -113,3 +113,17 @@ fn orphan_rejects_immediately_while_commit_restack_is_paused() {
         assert_command_rejected_while_commit_is_paused(repo, &["orphan"], "orphan", &operation);
     });
 }
+
+#[test]
+fn reparent_rejects_immediately_while_commit_restack_is_paused() {
+    with_temp_repo("dig-pause-guard", |repo| {
+        let operation = pause_commit_restack(repo);
+
+        assert_command_rejected_while_commit_is_paused(
+            repo,
+            &["reparent", "-p", "main"],
+            "reparent",
+            &operation,
+        );
+    });
+}

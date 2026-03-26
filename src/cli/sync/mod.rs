@@ -89,6 +89,17 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
                     println!("{output}");
                 }
             }
+            SyncCompletion::Reparent(reparent_outcome) if reparent_outcome.status.success() => {
+                let view = tree::focused_context_view(&reparent_outcome.branch_name)?;
+                let rendered_tree = super::tree::render_stack_tree(&view);
+                let output = super::reparent::format_reparent_success_output(
+                    reparent_outcome,
+                    &rendered_tree,
+                );
+                if !output.is_empty() {
+                    println!("{output}");
+                }
+            }
             SyncCompletion::Full(full_outcome) if outcome.status.success() => {
                 let summary = format_full_sync_summary(full_outcome);
                 if !summary.is_empty() {
