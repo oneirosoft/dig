@@ -10,6 +10,7 @@ pub enum Accent {
     CommitHash,
     TagRef,
     InFlight,
+    SyncInFlight,
     Success,
     Failure,
 }
@@ -22,6 +23,7 @@ impl Accent {
             Self::CommitHash => "\x1b[33m",
             Self::TagRef => "\x1b[33m",
             Self::InFlight => "\x1b[34m",
+            Self::SyncInFlight => "\x1b[38;5;208m",
             Self::Success => "\x1b[32m",
             Self::Failure => "\x1b[31m",
         }
@@ -36,6 +38,7 @@ impl Accent {
             Self::CommitHash => Color::Yellow,
             Self::TagRef => Color::Yellow,
             Self::InFlight => Color::Blue,
+            Self::SyncInFlight => Color::Indexed(208),
             Self::Success => Color::Green,
             Self::Failure => Color::Red,
         }

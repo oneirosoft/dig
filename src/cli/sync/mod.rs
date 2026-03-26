@@ -1,13 +1,17 @@
+mod render;
+
 use std::io;
+use std::io::IsTerminal;
 
 use clap::Args;
 
 use crate::core::clean;
 use crate::core::merge;
 use crate::core::sync::{
-    self, RemotePushActionKind, RemotePushOutcome, SyncCompletion, SyncOptions,
+    self, RemotePushActionKind, RemotePushOutcome, SyncCompletion, SyncEvent, SyncOptions,
+    SyncStage,
 };
-use crate::core::tree;
+use crate::core::tree::{self, TreeOptions};
 
 use super::CommandOutcome;
 use super::common;
@@ -20,7 +24,22 @@ pub struct SyncArgs {
 }
 
 pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
-    let outcome = sync::run(&args.clone().into())?;
+    let animate = io::stdout().is_terminal();
+    let mut animation = SyncAnimationSession::default();
+    let outcome = if animate {
+        sync::run_with_reporter(&args.clone().into(), &mut |event| animation.apply(event))?
+    } else {
+        sync::run(&args.clone().into())?
+    };
+
+    if animate {
+        if outcome.status.success() {
+            animation.finish_success()?;
+        } else {
+            animation.finish_failure()?;
+        }
+    }
+
     let mut final_status = outcome.status;
 
     if let Some(completion) = &outcome.completion {
@@ -138,7 +157,13 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
                     } else {
                         println!();
 
-                        let clean_outcome = clean::apply(&full_outcome.cleanup_plan)?;
+                        let clean_outcome = if animate {
+                            println!("Finished local sync. Moving on to cleanup.");
+                            println!();
+                            execute_cleanup_with_animation(&full_outcome.cleanup_plan)?
+                        } else {
+                            clean::apply(&full_outcome.cleanup_plan)?
+                        };
                         final_status = clean_outcome.status;
 
                         if clean_outcome.status.success() {
@@ -244,9 +269,165 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
         }
     }
 
+    if animate && final_status.success() {
+        let tree_outcome = tree::run(&TreeOptions::default())?;
+        println!();
+        println!("{}", render::render_completed_tree(&tree_outcome.view));
+    }
+
     Ok(CommandOutcome {
         status: final_status,
     })
+}
+
+#[derive(Default)]
+struct SyncAnimationSession {
+    terminal: Option<render::AnimationTerminal>,
+    stage: Option<ActiveSyncStage>,
+}
+
+enum ActiveSyncStage {
+    Local(render::SyncAnimation),
+    Cleanup(super::clean::render::CleanAnimation),
+}
+
+impl SyncAnimationSession {
+    fn apply(&mut self, event: SyncEvent) -> io::Result<()> {
+        match event {
+            SyncEvent::StageStarted(SyncStage::LocalSync { .. }) => {
+                if let Some(ActiveSyncStage::Local(animation)) = self.stage.as_mut() {
+                    if animation.apply_event(&event) {
+                        self.render_active()?;
+                    }
+
+                    return Ok(());
+                }
+
+                let outcome = tree::run(&TreeOptions::default())?;
+                let mut animation = render::SyncAnimation::new(&outcome.view);
+                animation.apply_event(&event);
+                let mut terminal = render::AnimationTerminal::start()?;
+                terminal.render(&animation.render_active())?;
+                self.terminal = Some(terminal);
+                self.stage = Some(ActiveSyncStage::Local(animation));
+                Ok(())
+            }
+            SyncEvent::StageStarted(SyncStage::CleanupResume {
+                plan,
+                active_branch_name,
+                untracked_branches,
+                deleted_branches,
+                restacked_branches,
+            }) => {
+                let mut animation = super::clean::render::CleanAnimation::new(&plan);
+                animation.prime_resume(
+                    &restacked_branches,
+                    &deleted_branches,
+                    &untracked_branches,
+                    &active_branch_name,
+                );
+                let mut terminal = render::AnimationTerminal::start()?;
+                terminal.render(&animation.render_active())?;
+                self.terminal = Some(terminal);
+                self.stage = Some(ActiveSyncStage::Cleanup(animation));
+                Ok(())
+            }
+            SyncEvent::Cleanup(clean_event) => {
+                let Some(ActiveSyncStage::Cleanup(animation)) = self.stage.as_mut() else {
+                    return Ok(());
+                };
+
+                if animation.apply_event(&clean_event) {
+                    self.render_active()?;
+                }
+
+                Ok(())
+            }
+            _ => {
+                let Some(ActiveSyncStage::Local(animation)) = self.stage.as_mut() else {
+                    return Ok(());
+                };
+
+                if animation.apply_event(&event) {
+                    self.render_active()?;
+                }
+
+                Ok(())
+            }
+        }
+    }
+
+    fn finish_success(&mut self) -> io::Result<()> {
+        let Some(mut terminal) = self.terminal.take() else {
+            return Ok(());
+        };
+        let Some(stage) = self.stage.take() else {
+            return Ok(());
+        };
+
+        let frame = match stage {
+            ActiveSyncStage::Local(animation) => animation.render_final(),
+            ActiveSyncStage::Cleanup(animation) => animation.render_final(),
+        };
+        terminal.finish(&frame)
+    }
+
+    fn finish_failure(&mut self) -> io::Result<()> {
+        let Some(mut terminal) = self.terminal.take() else {
+            return Ok(());
+        };
+        let Some(stage) = self.stage.take() else {
+            return Ok(());
+        };
+
+        let frame = match stage {
+            ActiveSyncStage::Local(animation) => animation.render_active(),
+            ActiveSyncStage::Cleanup(animation) => animation.render_active(),
+        };
+        terminal.finish(&frame)
+    }
+
+    fn render_active(&mut self) -> io::Result<()> {
+        let Some(terminal) = self.terminal.as_mut() else {
+            return Ok(());
+        };
+        let Some(stage) = self.stage.as_ref() else {
+            return Ok(());
+        };
+
+        let frame = match stage {
+            ActiveSyncStage::Local(animation) => animation.render_active(),
+            ActiveSyncStage::Cleanup(animation) => animation.render_active(),
+        };
+        terminal.render(&frame)
+    }
+}
+
+fn execute_cleanup_with_animation(plan: &clean::CleanPlan) -> io::Result<clean::CleanApplyOutcome> {
+    let mut animation = super::clean::render::CleanAnimation::new(plan);
+    let mut terminal = render::AnimationTerminal::start()?;
+    terminal.render(&animation.render_active())?;
+
+    let outcome = clean::apply_with_reporter(plan, &mut |event| {
+        if animation.apply_event(&event) {
+            terminal.render(&animation.render_active())?;
+        }
+
+        Ok(())
+    })?;
+
+    if outcome.status.success() {
+        terminal.finish(&animation.render_final())?;
+    } else {
+        terminal.finish(&animation.render_active())?;
+        if outcome.paused {
+            common::print_restack_pause_guidance(outcome.failure_output.as_deref());
+        } else {
+            common::print_trimmed_stderr(outcome.failure_output.as_deref());
+        }
+    }
+
+    Ok(outcome)
 }
 
 impl From<SyncArgs> for SyncOptions {

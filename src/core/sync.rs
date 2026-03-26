@@ -20,6 +20,47 @@ pub struct SyncOptions {
     pub continue_operation: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncStage {
+    LocalSync {
+        phase: PendingSyncPhase,
+        step_branch_name: String,
+        active_branch_name: String,
+        deleted_branches: Vec<String>,
+        restacked_branches: Vec<RestackPreview>,
+    },
+    CleanupResume {
+        plan: clean::CleanPlan,
+        active_branch_name: String,
+        untracked_branches: Vec<String>,
+        deleted_branches: Vec<String>,
+        restacked_branches: Vec<RestackPreview>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncEvent {
+    StageStarted(SyncStage),
+    BranchArchived {
+        branch_name: String,
+    },
+    RestackStarted {
+        branch_name: String,
+        onto_branch: String,
+    },
+    RestackProgress {
+        branch_name: String,
+        onto_branch: String,
+        current_commit: usize,
+        total_commits: usize,
+    },
+    RestackCompleted {
+        branch_name: String,
+        onto_branch: String,
+    },
+    Cleanup(clean::CleanEvent),
+}
+
 #[derive(Debug)]
 pub enum SyncCompletion {
     Commit(commit::CommitOutcome),
@@ -137,8 +178,15 @@ struct OutdatedBranchStep {
 }
 
 pub fn run(options: &SyncOptions) -> io::Result<SyncOutcome> {
+    run_with_reporter(options, &mut |_| Ok(()))
+}
+
+pub fn run_with_reporter<F>(options: &SyncOptions, reporter: &mut F) -> io::Result<SyncOutcome>
+where
+    F: FnMut(SyncEvent) -> io::Result<()>,
+{
     if !options.continue_operation {
-        return run_full_sync();
+        return run_full_sync_with_reporter(reporter);
     }
 
     let session = open_initialized("dig is not initialized; run 'dig init' first")?;
@@ -201,8 +249,20 @@ pub fn run(options: &SyncOptions) -> io::Result<SyncOutcome> {
             })
         }
         crate::core::store::PendingOperationKind::Clean(payload) => {
+            let mut restacked_branches = payload.restacked_branches.clone();
+            restacked_branches.extend(pending_operation.completed_branches().iter().cloned());
+            reporter(SyncEvent::StageStarted(SyncStage::CleanupResume {
+                plan: clean::plan_for_resume(&payload)?,
+                active_branch_name: pending_operation.active_action().branch_name.clone(),
+                untracked_branches: payload.untracked_branches.clone(),
+                deleted_branches: payload.deleted_branches.clone(),
+                restacked_branches,
+            }))?;
             let trunk_branch = payload.trunk_branch.clone();
-            let outcome = clean::resume_after_sync(pending_operation, payload)?;
+            let outcome =
+                clean::resume_after_sync_with_reporter(pending_operation, payload, &mut |event| {
+                    reporter(SyncEvent::Cleanup(event))
+                })?;
             let status = outcome.status;
             let failure_output = outcome.failure_output.clone();
             let paused = outcome.paused;
@@ -241,13 +301,16 @@ pub fn run(options: &SyncOptions) -> io::Result<SyncOutcome> {
             })
         }
         crate::core::store::PendingOperationKind::Sync(payload) => {
-            let outcome = resume_full_sync(pending_operation, payload)?;
+            let outcome = resume_full_sync_with_reporter(pending_operation, payload, reporter)?;
             finalize_full_sync_outcome(outcome)
         }
     }
 }
 
-fn run_full_sync() -> io::Result<SyncOutcome> {
+fn run_full_sync_with_reporter<F>(reporter: &mut F) -> io::Result<SyncOutcome>
+where
+    F: FnMut(SyncEvent) -> io::Result<()>,
+{
     let mut session = open_initialized("dig is not initialized; run 'dig init' first")?;
     workflow::ensure_ready_for_operation(&session.repo, "sync")?;
     workflow::ensure_no_pending_operation(&session.paths, "sync")?;
@@ -269,26 +332,41 @@ fn run_full_sync() -> io::Result<SyncOutcome> {
             ..LocalSyncProgress::default()
         },
         remote_sync_enabled,
+        reporter,
     )?;
 
     finalize_full_sync_outcome(outcome)
 }
 
-fn resume_full_sync(
+fn resume_full_sync_with_reporter<F>(
     pending_operation: PendingOperationState,
     payload: PendingSyncOperation,
-) -> io::Result<LocalSyncOutcome> {
+    reporter: &mut F,
+) -> io::Result<LocalSyncOutcome>
+where
+    F: FnMut(SyncEvent) -> io::Result<()>,
+{
     let mut session = open_initialized("dig is not initialized; run 'dig init' first")?;
     let mut progress = LocalSyncProgress {
         repaired_pull_requests: Vec::new(),
         deleted_branches: payload.deleted_branches,
         restacked_branches: payload.restacked_branches,
     };
+    let mut resumed_restacked_branches = progress.restacked_branches.clone();
+    resumed_restacked_branches.extend(pending_operation.completed_branches().iter().cloned());
+
+    reporter(SyncEvent::StageStarted(SyncStage::LocalSync {
+        phase: payload.phase,
+        step_branch_name: payload.step_branch_name.clone(),
+        active_branch_name: pending_operation.active_action().branch_name.clone(),
+        deleted_branches: progress.deleted_branches.clone(),
+        restacked_branches: resumed_restacked_branches,
+    }))?;
 
     let restack_outcome = workflow::continue_resumable_restack_operation(
         &mut session,
         pending_operation,
-        &mut |_| Ok(()),
+        &mut |event| report_restack_event(reporter, event),
     )?;
     progress
         .restacked_branches
@@ -311,6 +389,7 @@ fn resume_full_sync(
         payload.original_branch,
         progress,
         payload.remote_sync_enabled,
+        reporter,
     )
 }
 
@@ -343,12 +422,16 @@ fn finalize_full_sync_outcome(outcome: LocalSyncOutcome) -> io::Result<SyncOutco
     })
 }
 
-fn execute_local_sync(
+fn execute_local_sync<F>(
     session: &mut crate::core::store::StoreSession,
     original_branch: String,
     mut progress: LocalSyncProgress,
     remote_sync_enabled: bool,
-) -> io::Result<LocalSyncOutcome> {
+    reporter: &mut F,
+) -> io::Result<LocalSyncOutcome>
+where
+    F: FnMut(SyncEvent) -> io::Result<()>,
+{
     let cleanup_mode = clean::mode_for_sync(remote_sync_enabled);
 
     loop {
@@ -359,6 +442,7 @@ fn execute_local_sync(
                 &mut progress,
                 step,
                 remote_sync_enabled,
+                reporter,
             )? {
                 return Ok(outcome);
             }
@@ -373,6 +457,7 @@ fn execute_local_sync(
                 &mut progress,
                 step,
                 remote_sync_enabled,
+                reporter,
             )? {
                 return Ok(outcome);
             }
@@ -419,17 +504,35 @@ fn plan_deleted_local_branch_step(
     deleted_local::next_deleted_local_step(&session.state, &session.config.trunk_branch)
 }
 
-fn apply_deleted_local_branch_step(
+fn apply_deleted_local_branch_step<F>(
     session: &mut crate::core::store::StoreSession,
     original_branch: &str,
     progress: &mut LocalSyncProgress,
     step: deleted_local::DeletedLocalBranchStep,
     remote_sync_enabled: bool,
-) -> io::Result<Option<LocalSyncOutcome>> {
+    reporter: &mut F,
+) -> io::Result<Option<LocalSyncOutcome>>
+where
+    F: FnMut(SyncEvent) -> io::Result<()>,
+{
     let restack_actions = deleted_local::restack_actions_for_step(&session.state, &step)?;
 
+    if !restack_actions.is_empty() {
+        report_local_sync_stage_started(
+            reporter,
+            PendingSyncPhase::ReconcileDeletedLocalBranches,
+            &step.branch_name,
+            &restack_actions,
+            progress,
+        )?;
+    }
     deleted_local::archive_deleted_local_step(session, &step)?;
     progress.deleted_branches.push(step.branch_name.clone());
+    if !restack_actions.is_empty() {
+        reporter(SyncEvent::BranchArchived {
+            branch_name: step.branch_name.clone(),
+        })?;
+    }
 
     execute_sync_restack_step(
         session,
@@ -439,6 +542,8 @@ fn apply_deleted_local_branch_step(
         &step.branch_name,
         &restack_actions,
         remote_sync_enabled,
+        reporter,
+        false,
     )
 }
 
@@ -527,13 +632,17 @@ fn plan_outdated_branch_step(
     Ok(None)
 }
 
-fn apply_outdated_branch_step(
+fn apply_outdated_branch_step<F>(
     session: &mut crate::core::store::StoreSession,
     original_branch: &str,
     progress: &mut LocalSyncProgress,
     step: OutdatedBranchStep,
     remote_sync_enabled: bool,
-) -> io::Result<Option<LocalSyncOutcome>> {
+    reporter: &mut F,
+) -> io::Result<Option<LocalSyncOutcome>>
+where
+    F: FnMut(SyncEvent) -> io::Result<()>,
+{
     execute_sync_restack_step(
         session,
         original_branch,
@@ -542,10 +651,12 @@ fn apply_outdated_branch_step(
         &step.branch_name,
         &step.actions,
         remote_sync_enabled,
+        reporter,
+        true,
     )
 }
 
-fn execute_sync_restack_step(
+fn execute_sync_restack_step<F>(
     session: &mut crate::core::store::StoreSession,
     original_branch: &str,
     progress: &mut LocalSyncProgress,
@@ -553,9 +664,18 @@ fn execute_sync_restack_step(
     step_branch_name: &str,
     actions: &[RestackAction],
     remote_sync_enabled: bool,
-) -> io::Result<Option<LocalSyncOutcome>> {
+    reporter: &mut F,
+    emit_stage_started: bool,
+) -> io::Result<Option<LocalSyncOutcome>>
+where
+    F: FnMut(SyncEvent) -> io::Result<()>,
+{
     if actions.is_empty() {
         return Ok(None);
+    }
+
+    if emit_stage_started {
+        report_local_sync_stage_started(reporter, phase, step_branch_name, actions, progress)?;
     }
 
     let restack_outcome = workflow::execute_resumable_restack_operation(
@@ -569,7 +689,7 @@ fn execute_sync_restack_step(
             step_branch_name: step_branch_name.to_string(),
         }),
         actions,
-        &mut |_| Ok(()),
+        &mut |event| report_restack_event(reporter, event),
     )?;
     progress
         .restacked_branches
@@ -588,6 +708,54 @@ fn execute_sync_restack_step(
     }
 
     Ok(None)
+}
+
+fn report_local_sync_stage_started<F>(
+    reporter: &mut F,
+    phase: PendingSyncPhase,
+    step_branch_name: &str,
+    actions: &[RestackAction],
+    progress: &LocalSyncProgress,
+) -> io::Result<()>
+where
+    F: FnMut(SyncEvent) -> io::Result<()>,
+{
+    reporter(SyncEvent::StageStarted(SyncStage::LocalSync {
+        phase,
+        step_branch_name: step_branch_name.to_string(),
+        active_branch_name: actions[0].branch_name.clone(),
+        deleted_branches: progress.deleted_branches.clone(),
+        restacked_branches: progress.restacked_branches.clone(),
+    }))
+}
+
+fn report_restack_event<F>(
+    reporter: &mut F,
+    event: workflow::RestackExecutionEvent<'_>,
+) -> io::Result<()>
+where
+    F: FnMut(SyncEvent) -> io::Result<()>,
+{
+    match event {
+        workflow::RestackExecutionEvent::Started(action) => reporter(SyncEvent::RestackStarted {
+            branch_name: action.branch_name.clone(),
+            onto_branch: action.new_base.branch_name.clone(),
+        }),
+        workflow::RestackExecutionEvent::Progress { action, progress } => {
+            reporter(SyncEvent::RestackProgress {
+                branch_name: action.branch_name.clone(),
+                onto_branch: action.new_base.branch_name.clone(),
+                current_commit: progress.current,
+                total_commits: progress.total,
+            })
+        }
+        workflow::RestackExecutionEvent::Completed(action) => {
+            reporter(SyncEvent::RestackCompleted {
+                branch_name: action.branch_name.clone(),
+                onto_branch: action.new_base.branch_name.clone(),
+            })
+        }
+    }
 }
 
 fn repair_closed_pull_requests_for_deleted_parent_branches(
@@ -1169,7 +1337,10 @@ fn plan_remote_push_action(
 
 #[cfg(test)]
 mod tests {
-    use super::{RemotePushActionKind, plan_remote_pushes, pull_request_needs_repair};
+    use super::{
+        RemotePushActionKind, SyncEvent, SyncOptions, SyncStage, plan_remote_pushes,
+        pull_request_needs_repair, run, run_with_reporter,
+    };
     use crate::core::gh::{PullRequestState, PullRequestStatus};
     use crate::core::test_support::{
         append_file, commit_file, create_tracked_branch, git_ok, initialize_main_repo,
@@ -1322,5 +1493,153 @@ mod tests {
             "feat/auth-ui",
             "feat/auth",
         ));
+    }
+
+    #[test]
+    fn emits_local_sync_restack_events_for_outdated_branch_restack() {
+        with_temp_repo("dig-sync-core", |repo| {
+            initialize_main_repo(repo);
+            crate::core::init::run(&crate::core::init::InitOptions::default()).unwrap();
+            create_tracked_branch("feat/auth");
+            commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+            create_tracked_branch("feat/auth-ui");
+            commit_file(repo, "ui.txt", "ui\n", "feat: ui");
+            git_ok(repo, &["checkout", "feat/auth"]);
+            append_file(repo, "auth.txt", "more\n", "feat: parent follow-up");
+            git_ok(repo, &["checkout", "main"]);
+
+            let mut events = Vec::new();
+            let outcome = run_with_reporter(&SyncOptions::default(), &mut |event| {
+                events.push(event.clone());
+                Ok(())
+            })
+            .unwrap();
+
+            assert!(outcome.status.success());
+            assert!(matches!(
+                &events[0],
+                SyncEvent::StageStarted(SyncStage::LocalSync {
+                    step_branch_name,
+                    active_branch_name,
+                    ..
+                }) if step_branch_name == "feat/auth-ui" && active_branch_name == "feat/auth-ui"
+            ));
+            assert!(events.iter().any(|event| matches!(
+                event,
+                SyncEvent::RestackStarted {
+                    branch_name,
+                    onto_branch,
+                } if branch_name == "feat/auth-ui" && onto_branch == "feat/auth"
+            )));
+            assert!(events.iter().any(|event| matches!(
+                event,
+                SyncEvent::RestackProgress {
+                    branch_name,
+                    current_commit,
+                    total_commits,
+                    ..
+                } if branch_name == "feat/auth-ui" && *current_commit == 1 && *total_commits == 1
+            )));
+            assert!(events.iter().any(|event| matches!(
+                event,
+                SyncEvent::RestackCompleted {
+                    branch_name,
+                    onto_branch,
+                } if branch_name == "feat/auth-ui" && onto_branch == "feat/auth"
+            )));
+        });
+    }
+
+    #[test]
+    fn archives_deleted_local_branch_before_descendant_restack_events() {
+        with_temp_repo("dig-sync-core", |repo| {
+            initialize_main_repo(repo);
+            crate::core::init::run(&crate::core::init::InitOptions::default()).unwrap();
+            create_tracked_branch("feat/auth");
+            commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+            create_tracked_branch("feat/auth-api");
+            commit_file(repo, "api.txt", "api\n", "feat: api");
+            create_tracked_branch("feat/auth-api-tests");
+            commit_file(repo, "tests.txt", "tests\n", "feat: tests");
+            git_ok(repo, &["checkout", "feat/auth"]);
+            git_ok(repo, &["branch", "-D", "feat/auth-api"]);
+
+            let mut events = Vec::new();
+            let outcome = run_with_reporter(&SyncOptions::default(), &mut |event| {
+                events.push(event.clone());
+                Ok(())
+            })
+            .unwrap();
+
+            assert!(outcome.status.success());
+            let archive_index = events
+                .iter()
+                .position(|event| {
+                    matches!(
+                        event,
+                        SyncEvent::BranchArchived { branch_name } if branch_name == "feat/auth-api"
+                    )
+                })
+                .unwrap();
+            let restack_index = events
+                .iter()
+                .position(|event| {
+                    matches!(
+                        event,
+                        SyncEvent::RestackStarted { branch_name, .. }
+                            if branch_name == "feat/auth-api-tests"
+                    )
+                })
+                .unwrap();
+
+            assert!(archive_index < restack_index);
+        });
+    }
+
+    #[test]
+    fn resumes_sync_with_completed_snapshot_and_active_branch() {
+        with_temp_repo("dig-sync-core", |repo| {
+            initialize_main_repo(repo);
+            crate::core::init::run(&crate::core::init::InitOptions::default()).unwrap();
+            create_tracked_branch("feat/auth");
+            commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+            create_tracked_branch("feat/auth-ui");
+            commit_file(repo, "shared.txt", "child\n", "feat: ui");
+            git_ok(repo, &["checkout", "main"]);
+            commit_file(repo, "shared.txt", "main\n", "feat: trunk");
+            git_ok(repo, &["checkout", "feat/auth"]);
+
+            let paused = run(&SyncOptions::default()).unwrap();
+            assert!(!paused.status.success());
+
+            std::fs::write(repo.join("shared.txt"), "resolved\n").unwrap();
+            git_ok(repo, &["add", "shared.txt"]);
+
+            let mut events = Vec::new();
+            let outcome = run_with_reporter(
+                &SyncOptions {
+                    continue_operation: true,
+                },
+                &mut |event| {
+                    events.push(event.clone());
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+            assert!(outcome.status.success());
+            assert!(paused.paused);
+            assert!(matches!(
+                &events[0],
+                SyncEvent::StageStarted(SyncStage::LocalSync {
+                    active_branch_name,
+                    restacked_branches,
+                    ..
+                }) if active_branch_name == "feat/auth-ui"
+                    && restacked_branches
+                        .iter()
+                        .any(|branch| branch.branch_name == "feat/auth")
+            ));
+        });
     }
 }

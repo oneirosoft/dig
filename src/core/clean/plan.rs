@@ -6,7 +6,10 @@ use crate::core::git::{self, CherryMarker, CommitMetadata};
 use crate::core::graph::BranchGraph;
 use crate::core::restack::{self, RestackBaseTarget};
 use crate::core::store::types::DigState;
-use crate::core::store::{BranchNode, dig_paths, load_config, load_state};
+use crate::core::store::{
+    BranchNode, PendingCleanCandidate, PendingCleanCandidateKind, PendingCleanOperation, dig_paths,
+    load_config, load_state,
+};
 use crate::core::workflow;
 
 use super::types::{
@@ -31,6 +34,36 @@ pub(crate) fn plan(options: &CleanOptions) -> io::Result<CleanPlan> {
 
 pub(crate) fn plan_for_sync() -> io::Result<CleanPlan> {
     plan_with_mode(&CleanOptions::default(), CleanPlanMode::RemoteAwareSync)
+}
+
+pub(crate) fn plan_for_resume(payload: &PendingCleanOperation) -> io::Result<CleanPlan> {
+    let repo = git::resolve_repo_context()?;
+    let store_paths = dig_paths(&repo.git_dir);
+    let state = load_state(&store_paths)?;
+    let current_branch = git::current_branch_name_or(&payload.original_branch)?;
+    let mut candidates = Vec::with_capacity(1 + payload.remaining_candidates.len());
+
+    candidates.push(clean_candidate_from_pending_candidate(
+        &state,
+        &payload.trunk_branch,
+        &payload.current_candidate,
+    )?);
+
+    for candidate in &payload.remaining_candidates {
+        candidates.push(clean_candidate_from_pending_candidate(
+            &state,
+            &payload.trunk_branch,
+            candidate,
+        )?);
+    }
+
+    Ok(CleanPlan {
+        trunk_branch: payload.trunk_branch.clone(),
+        current_branch,
+        requested_branch_name: None,
+        candidates,
+        blocked: Vec::new(),
+    })
 }
 
 pub(crate) fn mode_for_sync(remote_sync_enabled: bool) -> CleanPlanMode {
@@ -315,6 +348,54 @@ fn clean_candidate_from_deleted_step(
         tree: step.tree,
         restack_plan: step.restack_plan,
         depth: step.depth,
+    }
+}
+
+fn clean_candidate_from_pending_candidate(
+    state: &DigState,
+    trunk_branch: &str,
+    candidate: &PendingCleanCandidate,
+) -> io::Result<CleanCandidate> {
+    match &candidate.kind {
+        PendingCleanCandidateKind::DeletedLocally => {
+            let step = deleted_local::plan_deleted_local_step_for_branch(
+                state,
+                trunk_branch,
+                &candidate.branch_name,
+            )?;
+
+            Ok(clean_candidate_from_deleted_step(step))
+        }
+        PendingCleanCandidateKind::IntegratedIntoParent { parent_base } => {
+            let node = state
+                .find_branch_by_name(&candidate.branch_name)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("tracked branch '{}' was not found", candidate.branch_name),
+                    )
+                })?;
+            let graph = BranchGraph::new(state);
+            let restack_actions = restack::plan_after_branch_detach(
+                state,
+                node.id,
+                &node.branch_name,
+                parent_base,
+                &node.parent,
+            )?;
+
+            Ok(CleanCandidate {
+                node_id: node.id,
+                branch_name: node.branch_name.clone(),
+                parent_branch_name: parent_base.branch_name.clone(),
+                reason: CleanReason::IntegratedIntoParent {
+                    parent_base: parent_base.clone(),
+                },
+                tree: graph.subtree(node.id)?,
+                restack_plan: restack::previews_for_actions(&restack_actions),
+                depth: graph.branch_depth(node.id),
+            })
+        }
     }
 }
 

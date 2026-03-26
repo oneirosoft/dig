@@ -1,4 +1,5 @@
 use crate::core::clean::{CleanCandidate, CleanEvent, CleanPlan, CleanTreeNode};
+use crate::core::restack::RestackPreview;
 
 pub use super::super::operation::AnimationTerminal;
 use super::super::operation::{BranchStatus, OperationSection, VisualNode, render_sections};
@@ -71,6 +72,38 @@ impl CleanAnimation {
         render_sections(&self.sections, true)
     }
 
+    pub fn prime_resume(
+        &mut self,
+        restacked_branches: &[RestackPreview],
+        deleted_branches: &[String],
+        untracked_branches: &[String],
+        active_branch_name: &str,
+    ) {
+        self.clear_in_flight();
+
+        for branch in restacked_branches {
+            if let Some(node) = self.find_node_mut(&branch.branch_name) {
+                node.status = BranchStatus::Succeeded;
+            }
+        }
+
+        for branch_name in deleted_branches {
+            if let Some(node) = self.find_node_mut(branch_name) {
+                node.status = BranchStatus::Deleted;
+            }
+        }
+
+        for branch_name in untracked_branches {
+            if let Some(node) = self.find_node_mut(branch_name) {
+                node.status = BranchStatus::Archived;
+            }
+        }
+
+        if let Some(node) = self.find_node_mut(active_branch_name) {
+            node.status = BranchStatus::start_in_flight();
+        }
+    }
+
     fn find_node_mut(&mut self, branch_name: &str) -> Option<&mut VisualNode> {
         for section in &mut self.sections {
             if let Some(node) = section.root.find_mut(branch_name) {
@@ -79,6 +112,12 @@ impl CleanAnimation {
         }
 
         None
+    }
+
+    fn clear_in_flight(&mut self) {
+        for section in &mut self.sections {
+            clear_in_flight(&mut section.root);
+        }
     }
 }
 
@@ -95,6 +134,16 @@ fn visual_node_from_tree(tree: &CleanTreeNode) -> VisualNode {
         tree.branch_name.clone(),
         tree.children.iter().map(visual_node_from_tree).collect(),
     )
+}
+
+fn clear_in_flight(node: &mut VisualNode) {
+    if matches!(node.status, BranchStatus::InFlight { .. }) {
+        node.status = BranchStatus::Pending;
+    }
+
+    for child in &mut node.children {
+        clear_in_flight(child);
+    }
 }
 
 #[cfg(test)]
@@ -201,6 +250,60 @@ mod tests {
         assert_eq!(
             animation.render_final(),
             concat!("main\n", "└── feat/users")
+        );
+    }
+
+    #[test]
+    fn primes_resumed_cleanup_with_completed_and_active_branches() {
+        let mut animation = CleanAnimation::new(&CleanPlan {
+            trunk_branch: "main".into(),
+            current_branch: "main".into(),
+            requested_branch_name: None,
+            candidates: vec![CleanCandidate {
+                node_id: Uuid::new_v4(),
+                branch_name: "feat/auth".into(),
+                parent_branch_name: "main".into(),
+                reason: CleanReason::IntegratedIntoParent {
+                    parent_base: RestackBaseTarget::local("main"),
+                },
+                tree: CleanTreeNode {
+                    branch_name: "feat/auth".into(),
+                    children: vec![
+                        CleanTreeNode {
+                            branch_name: "feat/auth-api".into(),
+                            children: vec![],
+                        },
+                        CleanTreeNode {
+                            branch_name: "feat/auth-ui".into(),
+                            children: vec![],
+                        },
+                    ],
+                },
+                restack_plan: vec![],
+                depth: 0,
+            }],
+            blocked: vec![],
+        });
+
+        animation.prime_resume(
+            &[crate::core::restack::RestackPreview {
+                branch_name: "feat/auth-api".into(),
+                onto_branch: "feat/auth".into(),
+                parent_changed: false,
+            }],
+            &[],
+            &[],
+            "feat/auth-ui",
+        );
+
+        assert_eq!(
+            animation.render_active(),
+            concat!(
+                "main\n",
+                "└── feat/auth\n",
+                "    ├── \u{1b}[32m✓\u{1b}[0m feat/auth-api\n",
+                "    └── \u{1b}[34m|\u{1b}[0m feat/auth-ui"
+            )
         );
     }
 }

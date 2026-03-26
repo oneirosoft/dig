@@ -149,10 +149,14 @@ where
     })
 }
 
-pub(crate) fn resume_after_sync(
+pub(crate) fn resume_after_sync_with_reporter<F>(
     pending_operation: PendingOperationState,
     payload: PendingCleanOperation,
-) -> io::Result<CleanApplyOutcome> {
+    reporter: &mut F,
+) -> io::Result<CleanApplyOutcome>
+where
+    F: FnMut(CleanEvent) -> io::Result<()>,
+{
     let mut untracked_branches = payload.untracked_branches;
     let mut session = open_initialized("dig is not initialized; run 'dig init' first")?;
     let mut deleted_branches = payload.deleted_branches;
@@ -161,7 +165,24 @@ pub(crate) fn resume_after_sync(
     let restack_outcome = workflow::continue_resumable_restack_operation(
         &mut session,
         pending_operation,
-        &mut |_| Ok(()),
+        &mut |event| match event {
+            RestackExecutionEvent::Started(action) => reporter(CleanEvent::RebaseStarted {
+                branch_name: action.branch_name.clone(),
+                onto_branch: action.new_base.branch_name.clone(),
+            }),
+            RestackExecutionEvent::Progress { action, progress } => {
+                reporter(CleanEvent::RebaseProgress {
+                    branch_name: action.branch_name.clone(),
+                    onto_branch: action.new_base.branch_name.clone(),
+                    current_commit: progress.current,
+                    total_commits: progress.total,
+                })
+            }
+            RestackExecutionEvent::Completed(action) => reporter(CleanEvent::RebaseCompleted {
+                branch_name: action.branch_name.clone(),
+                onto_branch: action.new_base.branch_name.clone(),
+            }),
+        },
     )?;
     restacked_branches.extend(restack_outcome.restacked_branches.clone());
 
@@ -183,7 +204,7 @@ pub(crate) fn resume_after_sync(
         &payload.current_candidate,
         &mut untracked_branches,
         &mut deleted_branches,
-        &mut |_| Ok(()),
+        reporter,
     )?;
     if !completion_status.success() {
         return Ok(CleanApplyOutcome {
@@ -211,7 +232,7 @@ pub(crate) fn resume_after_sync(
             &mut untracked_branches,
             &mut deleted_branches,
             &mut restacked_branches,
-            &mut |_| Ok(()),
+            reporter,
         )? {
             return Ok(outcome);
         }
