@@ -4,8 +4,9 @@ use std::process::{Command, ExitStatus};
 use crate::core::git::{self, RepoContext};
 use crate::core::restack::{self, RestackPreview};
 use crate::core::store::{
-    PendingCommitEntry, PendingCommitOperation, PendingOperationKind, PendingOperationState,
-    StoreSession, dig_paths, load_config, load_state, open_initialized,
+    BranchDivergenceState, PendingCommitEntry, PendingCommitOperation, PendingOperationKind,
+    PendingOperationState, StoreSession, dig_paths, load_config, load_state, open_initialized,
+    record_branch_divergence_state,
 };
 use crate::core::workflow;
 
@@ -311,6 +312,7 @@ fn maybe_restack_after_commit_inner(
         config,
         state,
     };
+    record_branch_divergence_state(&mut session, node.id, BranchDivergenceState::Diverged)?;
     let restack_outcome = match workflow::execute_resumable_restack_operation(
         &mut session,
         PendingOperationKind::Commit(PendingCommitOperation {

@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::PathBuf;
 
 use super::plan::{
@@ -8,8 +9,8 @@ use super::{BlockedBranch, CleanBlockReason, CleanOptions, CleanReason, apply};
 use crate::core::git::{self, CommitMetadata};
 use crate::core::restack::RestackBaseTarget;
 use crate::core::store::{
-    BranchPullRequestTrackedSource, ParentRef, TrackedPullRequest, dig_paths, load_state,
-    open_initialized, record_branch_pull_request_tracked,
+    BranchDivergenceState, BranchPullRequestTrackedSource, ParentRef, TrackedPullRequest,
+    dig_paths, load_state, open_initialized, record_branch_pull_request_tracked,
 };
 use crate::core::test_support::{
     append_file, commit_file, create_tracked_branch, git_ok, initialize_main_repo,
@@ -120,6 +121,116 @@ fn detects_parent_commit_that_mentions_tracked_pull_request_number() {
         },
         2,
     ));
+}
+
+#[test]
+fn fresh_branch_is_not_cleanable_without_commits() {
+    with_temp_repo("dig-clean", |repo| {
+        initialize_main_repo(repo);
+        create_tracked_branch("feat/auth");
+
+        let plan = build_plan(&CleanOptions {
+            branch_name: Some("feat/auth".into()),
+        })
+        .unwrap();
+
+        assert!(plan.candidates.is_empty());
+        assert_eq!(
+            plan.blocked,
+            vec![BlockedBranch {
+                branch_name: "feat/auth".into(),
+                reason: CleanBlockReason::NotIntegrated {
+                    parent_branch: "main".into(),
+                },
+            }]
+        );
+
+        let repo_context = git::resolve_repo_context().unwrap();
+        let state = load_state(&dig_paths(&repo_context.git_dir)).unwrap();
+        let branch = state.find_branch_by_name("feat/auth").unwrap();
+        assert_eq!(
+            branch.divergence_state,
+            BranchDivergenceState::NeverDiverged {
+                aligned_head_oid: git::ref_oid("feat/auth").unwrap(),
+            }
+        );
+    });
+}
+
+#[test]
+fn rebased_fresh_branch_remains_not_cleanable() {
+    with_temp_repo("dig-clean", |repo| {
+        initialize_main_repo(repo);
+        create_tracked_branch("feat/auth");
+        git_ok(repo, &["checkout", "main"]);
+        commit_file(repo, "README.md", "root\nmain\n", "feat: trunk follow-up");
+        git_ok(repo, &["checkout", "feat/auth"]);
+        git_ok(repo, &["rebase", "main"]);
+
+        let plan = build_plan(&CleanOptions {
+            branch_name: Some("feat/auth".into()),
+        })
+        .unwrap();
+
+        assert!(plan.candidates.is_empty());
+        assert_eq!(
+            plan.blocked,
+            vec![BlockedBranch {
+                branch_name: "feat/auth".into(),
+                reason: CleanBlockReason::NotIntegrated {
+                    parent_branch: "main".into(),
+                },
+            }]
+        );
+
+        let repo_context = git::resolve_repo_context().unwrap();
+        let state = load_state(&dig_paths(&repo_context.git_dir)).unwrap();
+        let branch = state.find_branch_by_name("feat/auth").unwrap();
+        assert_eq!(
+            branch.divergence_state,
+            BranchDivergenceState::NeverDiverged {
+                aligned_head_oid: git::ref_oid("feat/auth").unwrap(),
+            }
+        );
+    });
+}
+
+#[test]
+fn legacy_unknown_branch_with_fast_forwarded_manual_commit_is_cleanable() {
+    with_temp_repo("dig-clean", |repo| {
+        initialize_main_repo(repo);
+        create_tracked_branch("feat/auth");
+        commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+        git_ok(repo, &["checkout", "main"]);
+        git_ok(repo, &["merge", "--ff-only", "feat/auth"]);
+
+        let state_path = repo.join(".git/dig/state.json");
+        let mut state_json =
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&state_path).unwrap())
+                .unwrap();
+        state_json["nodes"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("divergence_state");
+        fs::write(
+            &state_path,
+            serde_json::to_string_pretty(&state_json).unwrap(),
+        )
+        .unwrap();
+
+        let plan = build_plan(&CleanOptions {
+            branch_name: Some("feat/auth".into()),
+        })
+        .unwrap();
+
+        assert_eq!(plan.candidates.len(), 1);
+        assert_eq!(plan.candidates[0].branch_name, "feat/auth");
+
+        let repo_context = git::resolve_repo_context().unwrap();
+        let state = load_state(&dig_paths(&repo_context.git_dir)).unwrap();
+        let branch = state.find_branch_by_name("feat/auth").unwrap();
+        assert_eq!(branch.divergence_state, BranchDivergenceState::Diverged);
+    });
 }
 
 #[test]

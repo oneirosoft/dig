@@ -3,9 +3,10 @@ use std::io;
 use uuid::Uuid;
 
 use super::{
-    BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchCreatedEvent, BranchNode,
-    BranchPullRequestTrackedEvent, BranchPullRequestTrackedSource, BranchReparentedEvent, DigEvent,
-    ParentRef, TrackedPullRequest, now_unix_timestamp_secs, save_state,
+    BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchCreatedEvent,
+    BranchDivergenceState, BranchNode, BranchPullRequestTrackedEvent,
+    BranchPullRequestTrackedSource, BranchReparentedEvent, DigEvent, ParentRef, TrackedPullRequest,
+    now_unix_timestamp_secs, save_state,
 };
 use crate::core::store::append_event;
 use crate::core::store::session::StoreSession;
@@ -98,4 +99,20 @@ pub fn record_branch_pull_request_tracked(
             source,
         }),
     )
+}
+
+pub fn record_branch_divergence_state(
+    session: &mut StoreSession,
+    branch_id: Uuid,
+    divergence_state: BranchDivergenceState,
+) -> io::Result<bool> {
+    if !session
+        .state
+        .set_branch_divergence_state(branch_id, divergence_state)?
+    {
+        return Ok(false);
+    }
+
+    save_state(&session.paths, &session.state)?;
+    Ok(true)
 }

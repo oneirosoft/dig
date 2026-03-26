@@ -161,7 +161,7 @@ impl<'a> BranchGraph<'a> {
 mod tests {
     use super::{BranchGraph, BranchLineageNode, BranchTreeNode};
     use crate::core::store::types::{DIG_STATE_VERSION, DigState};
-    use crate::core::store::{BranchNode, ParentRef, TrackedPullRequest};
+    use crate::core::store::{BranchDivergenceState, BranchNode, ParentRef, TrackedPullRequest};
     use uuid::Uuid;
 
     fn fixture_state() -> (DigState, Uuid, Uuid, Uuid) {
@@ -181,6 +181,7 @@ mod tests {
                         fork_point_oid: "abc123".into(),
                         head_oid_at_creation: "abc123".into(),
                         created_at_unix_secs: 1,
+                        divergence_state: BranchDivergenceState::Unknown,
                         pull_request: Some(TrackedPullRequest { number: 42 }),
                         archived: false,
                     },
@@ -192,6 +193,7 @@ mod tests {
                         fork_point_oid: "def456".into(),
                         head_oid_at_creation: "def456".into(),
                         created_at_unix_secs: 2,
+                        divergence_state: BranchDivergenceState::Unknown,
                         pull_request: None,
                         archived: false,
                     },
@@ -203,6 +205,7 @@ mod tests {
                         fork_point_oid: "fedcba".into(),
                         head_oid_at_creation: "fedcba".into(),
                         created_at_unix_secs: 3,
+                        divergence_state: BranchDivergenceState::Unknown,
                         pull_request: None,
                         archived: false,
                     },

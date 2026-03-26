@@ -314,6 +314,7 @@ where
     let mut session = open_initialized("dig is not initialized; run 'dig init' first")?;
     workflow::ensure_ready_for_operation(&session.repo, "sync")?;
     workflow::ensure_no_pending_operation(&session.paths, "sync")?;
+    clean::reconcile_branch_divergence_state(&mut session)?;
     let remote_sync_enabled = fetch_sync_remotes(&session)?;
     let repaired_pull_requests = if remote_sync_enabled {
         repair_closed_pull_requests_for_deleted_parent_branches(&session)?
@@ -347,6 +348,7 @@ where
     F: FnMut(SyncEvent) -> io::Result<()>,
 {
     let mut session = open_initialized("dig is not initialized; run 'dig init' first")?;
+    clean::reconcile_branch_divergence_state(&mut session)?;
     let mut progress = LocalSyncProgress {
         repaired_pull_requests: Vec::new(),
         deleted_branches: payload.deleted_branches,
@@ -435,6 +437,8 @@ where
     let cleanup_mode = clean::mode_for_sync(remote_sync_enabled);
 
     loop {
+        clean::reconcile_branch_divergence_state(session)?;
+
         if let Some(step) = plan_deleted_local_branch_step(session)? {
             if let Some(outcome) = apply_deleted_local_branch_step(
                 session,
@@ -603,7 +607,7 @@ fn plan_outdated_branch_step(
             ));
         }
 
-        if clean::branch_is_integrated(&parent_branch_name, &node.branch_name)? {
+        if clean::tracked_branch_is_integrated(&node, &parent_branch_name)? {
             continue;
         }
 

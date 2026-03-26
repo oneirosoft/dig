@@ -4,7 +4,8 @@ use std::fs;
 
 use support::{
     active_rebase_head_name, append_to_file, commit_file, dig, dig_ok, git_ok, git_stdout,
-    initialize_main_repo, load_operation_json, strip_ansi, with_temp_repo, write_file,
+    initialize_main_repo, load_operation_json, load_state_json, strip_ansi, with_temp_repo,
+    write_file,
 };
 
 #[test]
@@ -25,7 +26,6 @@ fn restacks_tracked_descendants_after_commit_and_preserves_store_files() {
         );
         git_ok(repo, &["checkout", "feat/auth"]);
 
-        let state_before = fs::read_to_string(repo.join(".git/dig/state.json")).unwrap();
         let events_before = fs::read_to_string(repo.join(".git/dig/events.ndjson")).unwrap();
 
         append_to_file(repo, "auth.txt", "follow-up\n");
@@ -50,9 +50,16 @@ fn restacks_tracked_descendants_after_commit_and_preserves_store_files() {
             ),
             git_stdout(repo, &["rev-parse", "feat/auth-api"])
         );
+        let state = load_state_json(repo);
         assert_eq!(
-            fs::read_to_string(repo.join(".git/dig/state.json")).unwrap(),
-            state_before
+            state["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|node| node["branch_name"].as_str() == Some("feat/auth"))
+                .unwrap()["divergence_state"]["kind"]
+                .as_str(),
+            Some("diverged")
         );
         assert_eq!(
             fs::read_to_string(repo.join(".git/dig/events.ndjson")).unwrap(),
@@ -72,7 +79,6 @@ fn restacks_child_after_amend_using_old_head_oid() {
         commit_file(repo, "ui.txt", "ui\n", "feat: auth ui");
         git_ok(repo, &["checkout", "feat/auth"]);
 
-        let state_before = fs::read_to_string(repo.join(".git/dig/state.json")).unwrap();
         let events_before = fs::read_to_string(repo.join(".git/dig/events.ndjson")).unwrap();
         let old_head = git_stdout(repo, &["rev-parse", "feat/auth"]);
 
@@ -91,9 +97,16 @@ fn restacks_child_after_amend_using_old_head_oid() {
             new_head
         );
         assert_eq!(git_stdout(repo, &["branch", "--show-current"]), "feat/auth");
+        let state = load_state_json(repo);
         assert_eq!(
-            fs::read_to_string(repo.join(".git/dig/state.json")).unwrap(),
-            state_before
+            state["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|node| node["branch_name"].as_str() == Some("feat/auth"))
+                .unwrap()["divergence_state"]["kind"]
+                .as_str(),
+            Some("diverged")
         );
         assert_eq!(
             fs::read_to_string(repo.join(".git/dig/events.ndjson")).unwrap(),
@@ -125,7 +138,6 @@ fn leaves_rebase_open_on_conflicting_child_after_commit() {
         );
         git_ok(repo, &["checkout", "feat/auth"]);
 
-        let state_before = fs::read_to_string(repo.join(".git/dig/state.json")).unwrap();
         let events_before = fs::read_to_string(repo.join(".git/dig/events.ndjson")).unwrap();
 
         write_file(repo, "shared.txt", "parent\n");
@@ -149,9 +161,16 @@ fn leaves_rebase_open_on_conflicting_child_after_commit() {
             git_stdout(repo, &["log", "-1", "--format=%s", "feat/auth"]),
             "feat: parent follow-up"
         );
+        let state = load_state_json(repo);
         assert_eq!(
-            fs::read_to_string(repo.join(".git/dig/state.json")).unwrap(),
-            state_before
+            state["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|node| node["branch_name"].as_str() == Some("feat/auth"))
+                .unwrap()["divergence_state"]["kind"]
+                .as_str(),
+            Some("diverged")
         );
         assert_eq!(
             fs::read_to_string(repo.join(".git/dig/events.ndjson")).unwrap(),

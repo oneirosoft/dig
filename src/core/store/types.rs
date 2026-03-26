@@ -117,6 +117,23 @@ impl DigState {
 
         Ok(())
     }
+
+    pub fn set_branch_divergence_state(
+        &mut self,
+        node_id: Uuid,
+        divergence_state: BranchDivergenceState,
+    ) -> io::Result<bool> {
+        let node = self.find_branch_by_id_mut(node_id).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "tracked branch was not found")
+        })?;
+
+        if node.divergence_state == divergence_state {
+            return Ok(false);
+        }
+
+        node.divergence_state = divergence_state;
+        Ok(true)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -300,8 +317,21 @@ pub struct BranchNode {
     pub head_oid_at_creation: String,
     pub created_at_unix_secs: u64,
     #[serde(default)]
+    pub divergence_state: BranchDivergenceState,
+    #[serde(default)]
     pub pull_request: Option<TrackedPullRequest>,
     pub archived: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BranchDivergenceState {
+    #[default]
+    Unknown,
+    NeverDiverged {
+        aligned_head_oid: String,
+    },
+    Diverged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -391,11 +421,11 @@ pub fn now_unix_timestamp_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchNode,
-        BranchPullRequestTrackedEvent, BranchPullRequestTrackedSource, DigConfig, DigEvent,
-        DigState, ParentRef, PendingCommitOperation, PendingOperationKind, PendingOperationState,
-        PendingOrphanOperation, PendingReparentOperation, PendingSyncOperation, PendingSyncPhase,
-        TrackedPullRequest,
+        BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchDivergenceState,
+        BranchNode, BranchPullRequestTrackedEvent, BranchPullRequestTrackedSource, DigConfig,
+        DigEvent, DigState, ParentRef, PendingCommitOperation, PendingOperationKind,
+        PendingOperationState, PendingOrphanOperation, PendingReparentOperation,
+        PendingSyncOperation, PendingSyncPhase, TrackedPullRequest,
     };
     use crate::core::restack::{RestackAction, RestackBaseTarget};
     use uuid::Uuid;
@@ -410,6 +440,7 @@ mod tests {
             fork_point_oid: "abc123".into(),
             head_oid_at_creation: "abc123".into(),
             created_at_unix_secs: 1,
+            divergence_state: BranchDivergenceState::Unknown,
             pull_request: None,
             archived: false,
         };
@@ -469,6 +500,7 @@ mod tests {
                 fork_point_oid: "abc123".into(),
                 head_oid_at_creation: "def456".into(),
                 created_at_unix_secs: 1,
+                divergence_state: BranchDivergenceState::Unknown,
                 pull_request: None,
                 archived: false,
             },
@@ -513,7 +545,32 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(node.divergence_state, BranchDivergenceState::Unknown);
         assert_eq!(node.pull_request, None);
+    }
+
+    #[test]
+    fn serializes_branch_divergence_state() {
+        let node = BranchNode {
+            id: Uuid::nil(),
+            branch_name: "feature/api".into(),
+            parent: ParentRef::Trunk,
+            base_ref: "main".into(),
+            fork_point_oid: "abc123".into(),
+            head_oid_at_creation: "abc123".into(),
+            created_at_unix_secs: 1,
+            divergence_state: BranchDivergenceState::NeverDiverged {
+                aligned_head_oid: "abc123".into(),
+            },
+            pull_request: None,
+            archived: false,
+        };
+
+        let serialized = serde_json::to_string(&node).unwrap();
+
+        assert!(serialized.contains("\"divergence_state\""));
+        assert!(serialized.contains("\"kind\":\"never_diverged\""));
+        assert!(serialized.contains("\"aligned_head_oid\":\"abc123\""));
     }
 
     #[test]

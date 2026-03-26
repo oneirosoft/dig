@@ -339,6 +339,26 @@ pub fn commit_metadata_in_range(range_spec: &str) -> io::Result<Vec<CommitMetada
     Ok(parse_commit_metadata_records(&stdout))
 }
 
+pub fn reflog_subjects(reference: &str) -> io::Result<Vec<String>> {
+    let output = Command::new("git")
+        .args(["reflog", "show", "--format=%gs", reference])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(git_command_failed(&output));
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+
+    Ok(stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 pub fn branch_push_target_if_needed(branch_name: &str) -> io::Result<Option<BranchPushTarget>> {
     let Some(target) = branch_push_target(branch_name)? else {
         return Ok(None);

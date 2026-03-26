@@ -178,6 +178,96 @@ fn sync_reports_noop_when_local_stacks_are_already_in_sync() {
 }
 
 #[test]
+fn sync_does_not_prompt_to_clean_fresh_branch_without_commits() {
+    with_temp_repo("dig-sync-cli", |repo| {
+        initialize_main_repo(repo);
+        dig_ok(repo, &["init"]);
+        dig_ok(repo, &["branch", "feat/auth"]);
+
+        let output = dig_ok(repo, &["sync"]);
+        let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
+
+        assert_eq!(stdout.trim_end(), "Local stacks are already in sync.");
+        assert!(!stdout.contains("Merged branches ready to clean:"));
+        assert!(!stdout.contains("Delete 1 merged branch? [y/N]"));
+    });
+}
+
+#[test]
+fn sync_does_not_prompt_to_clean_fresh_child_branch_without_commits() {
+    with_temp_repo("dig-sync-cli", |repo| {
+        initialize_main_repo(repo);
+        dig_ok(repo, &["init"]);
+        dig_ok(repo, &["branch", "feat/auth"]);
+        commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+        dig_ok(repo, &["branch", "feat/auth-ui"]);
+
+        let output = dig_ok(repo, &["sync"]);
+        let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
+
+        assert_eq!(stdout.trim_end(), "Local stacks are already in sync.");
+        assert!(!stdout.contains("Merged branches ready to clean:"));
+        assert!(!stdout.contains("Delete 1 merged branch? [y/N]"));
+    });
+}
+
+#[test]
+fn sync_restacks_fresh_branch_after_trunk_advances_without_prompting_cleanup() {
+    with_temp_repo("dig-sync-cli", |repo| {
+        initialize_main_repo(repo);
+        dig_ok(repo, &["init"]);
+        dig_ok(repo, &["branch", "feat/auth"]);
+        git_ok(repo, &["checkout", "main"]);
+        commit_file(repo, "README.md", "root\nmain\n", "feat: trunk follow-up");
+        git_ok(repo, &["checkout", "feat/auth"]);
+
+        let output = dig_ok(repo, &["sync"]);
+        let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
+        let state = load_state_json(repo);
+        let auth = find_node(&state, "feat/auth").unwrap();
+
+        assert!(stdout.contains("Restacked:"));
+        assert!(stdout.contains("- feat/auth onto main"));
+        assert!(!stdout.contains("Merged branches ready to clean:"));
+        assert!(!stdout.contains("Delete 1 merged branch? [y/N]"));
+        assert_eq!(
+            git_stdout(repo, &["merge-base", "main", "feat/auth"]),
+            git_stdout(repo, &["rev-parse", "main"])
+        );
+        assert_eq!(
+            auth["divergence_state"]["kind"].as_str(),
+            Some("never_diverged")
+        );
+        assert_eq!(
+            auth["divergence_state"]["aligned_head_oid"].as_str(),
+            Some(git_stdout(repo, &["rev-parse", "feat/auth"]).as_str())
+        );
+    });
+}
+
+#[test]
+fn sync_cleans_fast_forward_merged_branch_after_manual_git_commit() {
+    with_temp_repo("dig-sync-cli", |repo| {
+        initialize_main_repo(repo);
+        dig_ok(repo, &["init"]);
+        dig_ok(repo, &["branch", "feat/auth"]);
+        commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+        git_ok(repo, &["checkout", "main"]);
+        git_ok(repo, &["merge", "--ff-only", "feat/auth"]);
+
+        let output = dig_with_input(repo, &["sync"], "y\n");
+        let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
+
+        assert!(stdout.contains("Merged branches ready to clean:"));
+        assert!(stdout.contains("- feat/auth merged into main"));
+        assert!(stdout.contains("Delete 1 merged branch? [y/N]"));
+        assert!(stdout.contains("Deleted:"));
+        assert!(stdout.contains("- feat/auth"));
+        assert!(!git_stdout(repo, &["branch", "--list", "feat/auth"]).contains("feat/auth"));
+    });
+}
+
+#[test]
 fn sync_cleans_branch_merged_by_tracked_pull_request_number_without_rebasing() {
     with_temp_repo("dig-sync-cli", |repo| {
         initialize_main_repo(repo);

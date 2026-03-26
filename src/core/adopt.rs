@@ -7,8 +7,9 @@ use crate::core::branch;
 use crate::core::git;
 use crate::core::restack::{RestackAction, RestackBaseTarget};
 use crate::core::store::{
-    BranchNode, ParentRef, PendingAdoptOperation, PendingOperationKind, PendingOperationState,
-    now_unix_timestamp_secs, open_initialized, open_or_initialize, record_branch_adopted,
+    BranchDivergenceState, BranchNode, ParentRef, PendingAdoptOperation, PendingOperationKind,
+    PendingOperationState, now_unix_timestamp_secs, open_initialized, open_or_initialize,
+    record_branch_adopted,
 };
 use crate::core::workflow;
 
@@ -178,9 +179,16 @@ pub fn apply(plan: &AdoptPlan) -> io::Result<AdoptOutcome> {
         branch_name: plan.branch_name.clone(),
         parent: plan.parent.clone(),
         base_ref: plan.parent_branch_name.clone(),
-        fork_point_oid: parent_head_oid,
-        head_oid_at_creation: branch_head_oid,
+        fork_point_oid: parent_head_oid.clone(),
+        head_oid_at_creation: branch_head_oid.clone(),
         created_at_unix_secs: now_unix_timestamp_secs(),
+        divergence_state: if branch_head_oid == parent_head_oid {
+            BranchDivergenceState::NeverDiverged {
+                aligned_head_oid: branch_head_oid,
+            }
+        } else {
+            BranchDivergenceState::Diverged
+        },
         pull_request: None,
         archived: false,
     };
@@ -261,9 +269,16 @@ pub(crate) fn resume_after_sync(
         branch_name: payload.branch_name.clone(),
         parent: payload.parent.clone(),
         base_ref: payload.parent_branch_name.clone(),
-        fork_point_oid: parent_head_oid,
-        head_oid_at_creation: branch_head_oid,
+        fork_point_oid: parent_head_oid.clone(),
+        head_oid_at_creation: branch_head_oid.clone(),
         created_at_unix_secs: now_unix_timestamp_secs(),
+        divergence_state: if branch_head_oid == parent_head_oid {
+            BranchDivergenceState::NeverDiverged {
+                aligned_head_oid: branch_head_oid,
+            }
+        } else {
+            BranchDivergenceState::Diverged
+        },
         pull_request: None,
         archived: false,
     };

@@ -8,8 +8,8 @@ use crate::core::graph::BranchGraph;
 use crate::core::graph::BranchLineageNode;
 use crate::core::store::types::DigState;
 use crate::core::store::{
-    BranchNode, DigConfig, ParentRef, now_unix_timestamp_secs, open_or_initialize,
-    record_branch_created,
+    BranchDivergenceState, BranchNode, DigConfig, ParentRef, now_unix_timestamp_secs,
+    open_or_initialize, record_branch_created,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,8 +77,11 @@ pub fn run(options: &BranchOptions) -> io::Result<BranchOutcome> {
         parent,
         base_ref: parent_branch_name.clone(),
         fork_point_oid: parent_head_oid.clone(),
-        head_oid_at_creation: parent_head_oid,
+        head_oid_at_creation: parent_head_oid.clone(),
         created_at_unix_secs: now_unix_timestamp_secs(),
+        divergence_state: BranchDivergenceState::NeverDiverged {
+            aligned_head_oid: parent_head_oid,
+        },
         pull_request: None,
         archived: false,
     };
@@ -149,7 +152,7 @@ pub(crate) fn resolve_parent_ref(
 mod tests {
     use super::{BranchOptions, resolve_parent_branch_name, resolve_parent_ref};
     use crate::core::store::types::DigState;
-    use crate::core::store::{BranchNode, DigConfig, ParentRef};
+    use crate::core::store::{BranchDivergenceState, BranchNode, DigConfig, ParentRef};
     use uuid::Uuid;
 
     #[test]
@@ -186,6 +189,7 @@ mod tests {
                 fork_point_oid: "abc123".into(),
                 head_oid_at_creation: "abc123".into(),
                 created_at_unix_secs: 1,
+                divergence_state: BranchDivergenceState::Unknown,
                 pull_request: None,
                 archived: false,
             }],

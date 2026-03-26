@@ -5,10 +5,10 @@ use crate::core::deleted_local;
 use crate::core::git::{self, CherryMarker, CommitMetadata};
 use crate::core::graph::BranchGraph;
 use crate::core::restack::{self, RestackBaseTarget};
-use crate::core::store::types::DigState;
+use crate::core::store::types::{BranchDivergenceState, DigState};
 use crate::core::store::{
-    BranchNode, PendingCleanCandidate, PendingCleanCandidateKind, PendingCleanOperation, dig_paths,
-    load_config, load_state,
+    BranchNode, PendingCleanCandidate, PendingCleanCandidateKind, PendingCleanOperation,
+    StoreSession, dig_paths, load_state, open_initialized, save_state,
 };
 use crate::core::workflow;
 
@@ -34,6 +34,41 @@ pub(crate) fn plan(options: &CleanOptions) -> io::Result<CleanPlan> {
 
 pub(crate) fn plan_for_sync() -> io::Result<CleanPlan> {
     plan_with_mode(&CleanOptions::default(), CleanPlanMode::RemoteAwareSync)
+}
+
+pub(crate) fn reconcile_branch_divergence_state(session: &mut StoreSession) -> io::Result<()> {
+    let node_ids = session
+        .state
+        .nodes
+        .iter()
+        .filter(|node| !node.archived)
+        .map(|node| node.id)
+        .collect::<Vec<_>>();
+    let mut changed = false;
+
+    for node_id in node_ids {
+        let Some(node) = session.state.find_branch_by_id(node_id).cloned() else {
+            continue;
+        };
+        let Some(divergence_state) = reconciled_branch_divergence_state(
+            &session.state,
+            &session.config.trunk_branch,
+            &node,
+        )?
+        else {
+            continue;
+        };
+
+        changed |= session
+            .state
+            .set_branch_divergence_state(node_id, divergence_state)?;
+    }
+
+    if changed {
+        save_state(&session.paths, &session.state)?;
+    }
+
+    Ok(())
 }
 
 pub(crate) fn plan_for_resume(payload: &PendingCleanOperation) -> io::Result<CleanPlan> {
@@ -76,11 +111,8 @@ pub(crate) fn mode_for_sync(remote_sync_enabled: bool) -> CleanPlanMode {
 
 fn plan_with_mode(options: &CleanOptions, mode: CleanPlanMode) -> io::Result<CleanPlan> {
     workflow::ensure_no_pending_operation_for_command("clean")?;
-    let repo = git::resolve_repo_context()?;
-    let store_paths = dig_paths(&repo.git_dir);
-    let config = load_config(&store_paths)?
-        .ok_or_else(|| io::Error::other("dig is not initialized; run 'dig init' first"))?;
-    let state = load_state(&store_paths)?;
+    let mut session = open_initialized("dig is not initialized; run 'dig init' first")?;
+    reconcile_branch_divergence_state(&mut session)?;
     let current_branch = git::current_branch_name()?;
     let requested_branch_name = options
         .branch_name
@@ -91,13 +123,18 @@ fn plan_with_mode(options: &CleanOptions, mode: CleanPlanMode) -> io::Result<Cle
 
     match &requested_branch_name {
         Some(branch_name) => plan_for_requested_branch(
-            &state,
-            &config.trunk_branch,
+            &session.state,
+            &session.config.trunk_branch,
             &current_branch,
             branch_name,
             mode,
         ),
-        None => plan_for_all_branches(&state, &config.trunk_branch, &current_branch, mode),
+        None => plan_for_all_branches(
+            &session.state,
+            &session.config.trunk_branch,
+            &current_branch,
+            mode,
+        ),
     }
 }
 
@@ -270,6 +307,15 @@ fn evaluate_integrated_branch(
         }));
     }
 
+    if !matches!(node.divergence_state, BranchDivergenceState::Diverged) {
+        return Ok(BranchEvaluation::Blocked(BlockedBranch {
+            branch_name: node.branch_name.clone(),
+            reason: CleanBlockReason::NotIntegrated {
+                parent_branch: parent_branch_name,
+            },
+        }));
+    }
+
     let tracked_pull_request_number = node.pull_request.as_ref().map(|pr| pr.number);
     let parent_base = if branch_is_integrated_for_pull_request(
         local_parent_base.rebase_ref(),
@@ -399,11 +445,19 @@ fn clean_candidate_from_pending_candidate(
     }
 }
 
-pub(crate) fn branch_is_integrated(
+pub(crate) fn tracked_branch_is_integrated(
+    node: &BranchNode,
     parent_branch_name: &str,
-    branch_name: &str,
 ) -> io::Result<bool> {
-    branch_is_integrated_for_pull_request(parent_branch_name, branch_name, None)
+    if !matches!(node.divergence_state, BranchDivergenceState::Diverged) {
+        return Ok(false);
+    }
+
+    branch_is_integrated_for_pull_request(
+        parent_branch_name,
+        &node.branch_name,
+        node.pull_request.as_ref().map(|pr| pr.number),
+    )
 }
 
 fn branch_is_integrated_for_pull_request(
@@ -443,6 +497,78 @@ fn branch_is_integrated_by_cherry(parent_branch_name: &str, branch_name: &str) -
     Ok(markers
         .into_iter()
         .all(|marker| matches!(marker, CherryMarker::Equivalent)))
+}
+
+fn reconciled_branch_divergence_state(
+    state: &DigState,
+    trunk_branch: &str,
+    node: &BranchNode,
+) -> io::Result<Option<BranchDivergenceState>> {
+    if !git::branch_exists(&node.branch_name)? {
+        return Ok(None);
+    }
+
+    let Ok((parent_base, _)) =
+        deleted_local::resolve_replacement_parent(state, trunk_branch, &node.parent)
+    else {
+        return Ok(None);
+    };
+    if !git::branch_exists(&parent_base.branch_name)? {
+        return Ok(None);
+    }
+
+    let current_head_oid = git::ref_oid(&node.branch_name)?;
+    let desired_state = if branch_has_unique_commits(&parent_base.branch_name, &node.branch_name)? {
+        BranchDivergenceState::Diverged
+    } else {
+        match branch_reflog_indicates_divergence(&node.branch_name) {
+            Ok(true) => BranchDivergenceState::Diverged,
+            Ok(false) => BranchDivergenceState::NeverDiverged {
+                aligned_head_oid: current_head_oid,
+            },
+            Err(_) => match node.divergence_state {
+                BranchDivergenceState::Unknown => return Ok(None),
+                BranchDivergenceState::NeverDiverged { .. } => {
+                    BranchDivergenceState::NeverDiverged {
+                        aligned_head_oid: current_head_oid,
+                    }
+                }
+                BranchDivergenceState::Diverged => BranchDivergenceState::Diverged,
+            },
+        }
+    };
+
+    if node.divergence_state == desired_state {
+        Ok(None)
+    } else {
+        Ok(Some(desired_state))
+    }
+}
+
+fn branch_has_unique_commits(parent_branch_name: &str, branch_name: &str) -> io::Result<bool> {
+    let merge_base = git::merge_base(parent_branch_name, branch_name)?;
+    Ok(!git::commit_metadata_in_range(&format!("{merge_base}..{branch_name}"))?.is_empty())
+}
+
+fn branch_reflog_indicates_divergence(branch_name: &str) -> io::Result<bool> {
+    let reflog_subjects = git::reflog_subjects(branch_name)?;
+
+    Ok(reflog_subjects
+        .into_iter()
+        .any(|subject| reflog_subject_indicates_divergence(&subject)))
+}
+
+fn reflog_subject_indicates_divergence(subject: &str) -> bool {
+    [
+        "commit:",
+        "commit (amend):",
+        "cherry-pick:",
+        "revert:",
+        "merge ",
+        "merge:",
+    ]
+    .iter()
+    .any(|prefix| subject.starts_with(prefix))
 }
 
 fn branch_is_integrated_by_squash_message(

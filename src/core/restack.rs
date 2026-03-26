@@ -441,7 +441,7 @@ mod tests {
     };
     use crate::core::git;
     use crate::core::store::types::DIG_STATE_VERSION;
-    use crate::core::store::{BranchNode, ParentRef};
+    use crate::core::store::{BranchDivergenceState, BranchNode, ParentRef};
     use crate::core::test_support::{commit_file, git_ok, initialize_main_repo, with_temp_repo};
     use uuid::Uuid;
 
@@ -521,6 +521,7 @@ mod tests {
                         fork_point_oid: "root".into(),
                         head_oid_at_creation: "root".into(),
                         created_at_unix_secs: 1,
+                        divergence_state: BranchDivergenceState::Unknown,
                         pull_request: None,
                         archived: false,
                     },
@@ -532,6 +533,7 @@ mod tests {
                         fork_point_oid: "auth".into(),
                         head_oid_at_creation: "auth".into(),
                         created_at_unix_secs: 2,
+                        divergence_state: BranchDivergenceState::Unknown,
                         pull_request: None,
                         archived: false,
                     },
@@ -543,6 +545,7 @@ mod tests {
                         fork_point_oid: "api".into(),
                         head_oid_at_creation: "api".into(),
                         created_at_unix_secs: 3,
+                        divergence_state: BranchDivergenceState::Unknown,
                         pull_request: None,
                         archived: false,
                     },
@@ -596,6 +599,7 @@ mod tests {
                         fork_point_oid: "root".into(),
                         head_oid_at_creation: "root".into(),
                         created_at_unix_secs: 1,
+                        divergence_state: BranchDivergenceState::Unknown,
                         pull_request: None,
                         archived: false,
                     },
@@ -607,6 +611,7 @@ mod tests {
                         fork_point_oid: deleted_branch_head_oid.clone(),
                         head_oid_at_creation: deleted_branch_head_oid.clone(),
                         created_at_unix_secs: 2,
+                        divergence_state: BranchDivergenceState::Unknown,
                         pull_request: None,
                         archived: false,
                     },
@@ -665,6 +670,7 @@ mod tests {
                         fork_point_oid: "root".into(),
                         head_oid_at_creation: "root".into(),
                         created_at_unix_secs: 1,
+                        divergence_state: BranchDivergenceState::Unknown,
                         pull_request: None,
                         archived: false,
                     },
@@ -676,6 +682,7 @@ mod tests {
                         fork_point_oid: "auth".into(),
                         head_oid_at_creation: "auth".into(),
                         created_at_unix_secs: 2,
+                        divergence_state: BranchDivergenceState::Unknown,
                         pull_request: None,
                         archived: false,
                     },
@@ -687,6 +694,7 @@ mod tests {
                         fork_point_oid: "api".into(),
                         head_oid_at_creation: "api".into(),
                         created_at_unix_secs: 3,
+                        divergence_state: BranchDivergenceState::Unknown,
                         pull_request: None,
                         archived: false,
                     },
@@ -698,6 +706,7 @@ mod tests {
                         fork_point_oid: "platform-root".into(),
                         head_oid_at_creation: "platform-root".into(),
                         created_at_unix_secs: 4,
+                        divergence_state: BranchDivergenceState::Unknown,
                         pull_request: None,
                         archived: false,
                     },

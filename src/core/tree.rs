@@ -277,7 +277,7 @@ mod tests {
     };
     use crate::core::store::types::DIG_STATE_VERSION;
     use crate::core::store::types::DigState;
-    use crate::core::store::{BranchNode, ParentRef};
+    use crate::core::store::{BranchDivergenceState, BranchNode, ParentRef};
     use uuid::Uuid;
 
     #[test]
@@ -296,6 +296,7 @@ mod tests {
                     fork_point_oid: "1".into(),
                     head_oid_at_creation: "1".into(),
                     created_at_unix_secs: 1,
+                    divergence_state: BranchDivergenceState::Unknown,
                     pull_request: Some(crate::core::store::TrackedPullRequest { number: 101 }),
                     archived: false,
                 },
@@ -307,6 +308,7 @@ mod tests {
                     fork_point_oid: "2".into(),
                     head_oid_at_creation: "2".into(),
                     created_at_unix_secs: 2,
+                    divergence_state: BranchDivergenceState::Unknown,
                     pull_request: Some(crate::core::store::TrackedPullRequest { number: 102 }),
                     archived: false,
                 },
@@ -318,6 +320,7 @@ mod tests {
                     fork_point_oid: "3".into(),
                     head_oid_at_creation: "3".into(),
                     created_at_unix_secs: 3,
+                    divergence_state: BranchDivergenceState::Unknown,
                     pull_request: None,
                     archived: false,
                 },
