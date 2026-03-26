@@ -1,7 +1,9 @@
 mod support;
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde_json::json;
 use support::{
     active_rebase_head_name, commit_file, dig, dig_ok, dig_with_input, find_archived_node,
     find_node, git_ok, git_stdout, initialize_main_repo, load_events_json, load_operation_json,
@@ -33,6 +35,49 @@ fn clone_origin(repo: &Path, clone_name: &str) -> PathBuf {
     clone_dir
 }
 
+fn track_pull_request_number(repo: &Path, branch_name: &str, number: u64) {
+    let state_path = repo.join(".git/dig/state.json");
+    let mut state = load_state_json(repo);
+    let nodes = state["nodes"].as_array_mut().unwrap();
+    let node = nodes
+        .iter_mut()
+        .find(|node| {
+            node["branch_name"].as_str() == Some(branch_name)
+                && node["archived"].as_bool() == Some(false)
+        })
+        .unwrap();
+    node["pull_request"] = json!({ "number": number });
+    fs::write(state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+}
+
+fn setup_remotely_merged_root_branch_with_local_trunk_advance(repo: &Path) {
+    initialize_main_repo(repo);
+    initialize_origin_remote(repo);
+    dig_ok(repo, &["init"]);
+    dig_ok(repo, &["branch", "feat/auth"]);
+    overwrite_file(repo, "shared.txt", "feature\n", "feat: auth");
+    git_ok(repo, &["push", "-u", "origin", "feat/auth"]);
+    dig_ok(repo, &["branch", "feat/auth-ui"]);
+    commit_file(repo, "ui.txt", "ui\n", "feat: ui");
+    git_ok(repo, &["checkout", "main"]);
+    overwrite_file(
+        repo,
+        "shared.txt",
+        "local trunk\n",
+        "feat: local trunk follow-up",
+    );
+
+    let remote_repo = clone_origin(repo, "origin-worktree");
+    git_ok(&remote_repo, &["checkout", "main"]);
+    git_ok(&remote_repo, &["merge", "--squash", "origin/feat/auth"]);
+    git_ok(
+        &remote_repo,
+        &["commit", "--quiet", "-m", "feat: merge auth"],
+    );
+    git_ok(&remote_repo, &["push", "origin", "main"]);
+    git_ok(&remote_repo, &["push", "origin", "--delete", "feat/auth"]);
+}
+
 #[test]
 fn sync_reports_noop_when_local_stacks_are_already_in_sync() {
     with_temp_repo("dig-sync-cli", |repo| {
@@ -43,6 +88,57 @@ fn sync_reports_noop_when_local_stacks_are_already_in_sync() {
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
 
         assert_eq!(stdout.trim_end(), "Local stacks are already in sync.");
+    });
+}
+
+#[test]
+fn sync_cleans_branch_merged_by_tracked_pull_request_number_without_rebasing() {
+    with_temp_repo("dig-sync-cli", |repo| {
+        initialize_main_repo(repo);
+        dig_ok(repo, &["init"]);
+        dig_ok(repo, &["branch", "feat/auth"]);
+        commit_file(repo, "auth.txt", "auth\n", "feat: add GitHub PR workflows");
+        commit_file(
+            repo,
+            "tree.txt",
+            "tree\n",
+            "fix(tree): show PR numbers in lineage views",
+        );
+        track_pull_request_number(repo, "feat/auth", 2);
+
+        git_ok(repo, &["checkout", "main"]);
+        git_ok(repo, &["merge", "--squash", "feat/auth"]);
+        git_ok(
+            repo,
+            &[
+                "commit",
+                "--quiet",
+                "-m",
+                "feat: add GitHub PR workflows (#2)",
+                "-m",
+                "Adds GitHub PR creation and tracking support.",
+            ],
+        );
+
+        let output = dig_with_input(repo, &["sync"], "y\n");
+        let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+
+        assert!(
+            output.status.success(),
+            "stdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(stdout.contains("Merged branches ready to clean:"));
+        assert!(stdout.contains("- feat/auth merged into main"));
+        assert!(stdout.contains("Delete 1 merged branch? [y/N]"));
+        assert!(stdout.contains("Deleted:"));
+        assert!(stdout.contains("- feat/auth"));
+        assert!(!stderr.contains("dig sync --continue"));
+        assert!(!git_stdout(repo, &["branch", "--list", "feat/auth"]).contains("feat/auth"));
+        assert!(load_operation_json(repo).is_none());
+        let state = load_state_json(repo);
+        assert!(find_node(&state, "feat/auth").is_none());
+        assert!(find_archived_node(&state, "feat/auth").is_some());
     });
 }
 
@@ -512,29 +608,7 @@ fn sync_aborts_before_local_restack_when_fetch_fails() {
 #[test]
 fn sync_cleans_root_branch_merged_remotely_and_restacks_child_onto_fetched_remote_parent() {
     with_temp_repo("dig-sync-cli", |repo| {
-        initialize_main_repo(repo);
-        initialize_origin_remote(repo);
-        dig_ok(repo, &["init"]);
-        dig_ok(repo, &["branch", "feat/auth"]);
-        commit_file(repo, "auth.txt", "auth\n", "feat: auth");
-        git_ok(repo, &["push", "-u", "origin", "feat/auth"]);
-        dig_ok(repo, &["branch", "feat/auth-ui"]);
-        commit_file(repo, "ui.txt", "ui\n", "feat: ui");
-
-        let remote_repo = clone_origin(repo, "origin-worktree");
-        git_ok(&remote_repo, &["checkout", "main"]);
-        git_ok(&remote_repo, &["merge", "--squash", "origin/feat/auth"]);
-        git_ok(
-            &remote_repo,
-            &["commit", "--quiet", "-m", "feat: merge auth"],
-        );
-        std::fs::write(remote_repo.join("shared.txt"), "remote\n").unwrap();
-        git_ok(&remote_repo, &["add", "shared.txt"]);
-        git_ok(
-            &remote_repo,
-            &["commit", "--quiet", "-m", "feat: remote main follow-up"],
-        );
-        git_ok(&remote_repo, &["push", "origin", "main"]);
+        setup_remotely_merged_root_branch_with_local_trunk_advance(repo);
 
         let output = dig_with_input(repo, &["sync"], "y\nn\n");
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
@@ -546,9 +620,11 @@ fn sync_cleans_root_branch_merged_remotely_and_restacks_child_onto_fetched_remot
         assert!(stdout.contains("Deleted:"));
         assert!(stdout.contains("- feat/auth"));
         assert!(stdout.contains("Restacked:"));
+        assert!(!stdout.contains("- feat/auth onto main"));
         assert!(stdout.contains("- feat/auth-ui onto main"));
         assert!(stdout.contains("Remote branches to update:"));
         assert!(stdout.contains("- create feat/auth-ui on origin"));
+        assert!(!stdout.contains("- create feat/auth on origin"));
         assert!(stdout.contains("Push these remote updates? [y/N]"));
         assert!(stdout.contains("Skipped remote updates."));
         assert_eq!(
@@ -566,6 +642,32 @@ fn sync_cleans_root_branch_merged_remotely_and_restacks_child_onto_fetched_remot
         assert_eq!(child["parent"]["kind"], "trunk");
         assert!(find_node(&state, "feat/auth").is_none());
         assert!(find_archived_node(&state, "feat/auth").is_some());
+    });
+}
+
+#[test]
+fn sync_skips_recreating_remotely_merged_root_branch_when_cleanup_is_declined() {
+    with_temp_repo("dig-sync-cli", |repo| {
+        setup_remotely_merged_root_branch_with_local_trunk_advance(repo);
+
+        let output = dig_with_input(repo, &["sync"], "n\nn\n");
+        let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
+
+        assert!(output.status.success());
+        assert!(stdout.contains("Merged branches ready to clean:"));
+        assert!(stdout.contains("- feat/auth merged into main"));
+        assert!(stdout.contains("Delete 1 merged branch? [y/N]"));
+        assert!(stdout.contains("Skipped cleanup."));
+        assert!(stdout.contains("Remote branches to update:"));
+        assert!(stdout.contains("- create feat/auth-ui on origin"));
+        assert!(!stdout.contains("- create feat/auth on origin"));
+        assert!(!stdout.contains("- force-push feat/auth on origin"));
+        assert!(load_operation_json(repo).is_none());
+        assert!(git_stdout(repo, &["branch", "--list", "feat/auth"]).contains("feat/auth"));
+
+        let state = load_state_json(repo);
+        assert!(find_node(&state, "feat/auth").is_some());
+        assert!(find_archived_node(&state, "feat/auth").is_none());
     });
 }
 

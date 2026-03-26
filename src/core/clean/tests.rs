@@ -1,12 +1,16 @@
 use std::path::PathBuf;
 
 use super::plan::{
-    parent_commit_mentions_all_branch_commits, plan as build_plan, plan_for_sync as build_sync_plan,
+    parent_commit_mentions_all_branch_commits, parent_commit_mentions_tracked_pull_request,
+    plan as build_plan, plan_for_sync as build_sync_plan,
 };
 use super::{BlockedBranch, CleanBlockReason, CleanOptions, CleanReason, apply};
 use crate::core::git::{self, CommitMetadata};
 use crate::core::restack::RestackBaseTarget;
-use crate::core::store::{ParentRef, dig_paths, load_state};
+use crate::core::store::{
+    BranchPullRequestTrackedSource, ParentRef, TrackedPullRequest, dig_paths, load_state,
+    open_initialized, record_branch_pull_request_tracked,
+};
 use crate::core::test_support::{
     append_file, commit_file, create_tracked_branch, git_ok, initialize_main_repo,
     squash_merge_branch_with_commit_listing, with_temp_repo,
@@ -99,6 +103,26 @@ fn detects_squash_commit_message_that_mentions_branch_commits() {
 }
 
 #[test]
+fn detects_parent_commit_that_mentions_tracked_pull_request_number() {
+    assert!(parent_commit_mentions_tracked_pull_request(
+        &CommitMetadata {
+            sha: "parent".into(),
+            subject: "feat: add GitHub PR workflows (#2)".into(),
+            body: "See https://github.com/acme/dig/pull/2 for details.".into(),
+        },
+        2,
+    ));
+    assert!(!parent_commit_mentions_tracked_pull_request(
+        &CommitMetadata {
+            sha: "parent".into(),
+            subject: "feat: add GitHub PR workflows (#12)".into(),
+            body: String::new(),
+        },
+        2,
+    ));
+}
+
+#[test]
 fn cleans_squash_merged_parent_and_restacks_descendants() {
     with_temp_repo("dig-clean", |repo| {
         initialize_main_repo(repo);
@@ -183,6 +207,69 @@ fn cleans_squash_merged_parent_and_restacks_descendants() {
                 .nodes
                 .iter()
                 .any(|node| node.branch_name == "feat/auth" && node.archived)
+        );
+    });
+}
+
+#[test]
+fn clean_plan_detects_local_integration_by_tracked_pull_request_number() {
+    with_temp_repo("dig-clean", |repo| {
+        initialize_main_repo(repo);
+        create_tracked_branch("feat/auth");
+        commit_file(repo, "auth.txt", "auth\n", "feat: add GitHub PR workflows");
+        commit_file(
+            repo,
+            "tree.txt",
+            "tree\n",
+            "fix(tree): show PR numbers in lineage views",
+        );
+
+        let mut session = open_initialized("dig is not initialized").unwrap();
+        let branch = session
+            .state
+            .find_branch_by_name("feat/auth")
+            .unwrap()
+            .clone();
+        record_branch_pull_request_tracked(
+            &mut session,
+            branch.id,
+            branch.branch_name.clone(),
+            TrackedPullRequest { number: 2 },
+            BranchPullRequestTrackedSource::Created,
+        )
+        .unwrap();
+
+        git_ok(repo, &["checkout", "main"]);
+        git_ok(repo, &["merge", "--squash", "feat/auth"]);
+        git_ok(
+            repo,
+            &[
+                "commit",
+                "--quiet",
+                "-m",
+                "feat: add GitHub PR workflows (#2)",
+                "-m",
+                "Adds GitHub PR creation and tracking support.",
+            ],
+        );
+
+        let plan = build_plan(&CleanOptions {
+            branch_name: Some("feat/auth".into()),
+        })
+        .unwrap();
+
+        assert_eq!(
+            plan.candidates
+                .iter()
+                .map(|candidate| candidate.branch_name.clone())
+                .collect::<Vec<_>>(),
+            vec!["feat/auth".to_string()]
+        );
+        assert_eq!(
+            plan.candidates[0].reason,
+            CleanReason::IntegratedIntoParent {
+                parent_base: RestackBaseTarget::local("main"),
+            }
         );
     });
 }

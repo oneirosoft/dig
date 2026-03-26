@@ -20,7 +20,7 @@ enum BranchEvaluation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CleanPlanMode {
+pub(crate) enum CleanPlanMode {
     LocalOnly,
     RemoteAwareSync,
 }
@@ -31,6 +31,14 @@ pub(crate) fn plan(options: &CleanOptions) -> io::Result<CleanPlan> {
 
 pub(crate) fn plan_for_sync() -> io::Result<CleanPlan> {
     plan_with_mode(&CleanOptions::default(), CleanPlanMode::RemoteAwareSync)
+}
+
+pub(crate) fn mode_for_sync(remote_sync_enabled: bool) -> CleanPlanMode {
+    if remote_sync_enabled {
+        CleanPlanMode::RemoteAwareSync
+    } else {
+        CleanPlanMode::LocalOnly
+    }
 }
 
 fn plan_with_mode(options: &CleanOptions, mode: CleanPlanMode) -> io::Result<CleanPlan> {
@@ -225,12 +233,21 @@ fn evaluate_integrated_branch(
     }
 
     let local_parent_base = RestackBaseTarget::local(&parent_branch_name);
-    let parent_base = if branch_is_integrated(local_parent_base.rebase_ref(), &node.branch_name)? {
+    let tracked_pull_request_number = node.pull_request.as_ref().map(|pr| pr.number);
+    let parent_base = if branch_is_integrated_for_pull_request(
+        local_parent_base.rebase_ref(),
+        &node.branch_name,
+        tracked_pull_request_number,
+    )? {
         local_parent_base
     } else if mode == CleanPlanMode::RemoteAwareSync {
         match resolve_remote_parent_base(&parent_branch_name)? {
             Some(remote_parent_base)
-                if branch_is_integrated(remote_parent_base.rebase_ref(), &node.branch_name)? =>
+                if branch_is_integrated_for_pull_request(
+                    remote_parent_base.rebase_ref(),
+                    &node.branch_name,
+                    tracked_pull_request_number,
+                )? =>
             {
                 remote_parent_base
             }
@@ -271,6 +288,18 @@ fn evaluate_integrated_branch(
     }))
 }
 
+pub(crate) fn cleanup_candidate_for_branch(
+    state: &DigState,
+    trunk_branch: &str,
+    node: &BranchNode,
+    mode: CleanPlanMode,
+) -> io::Result<Option<CleanCandidate>> {
+    match evaluate_integrated_branch(state, trunk_branch, node, mode)? {
+        BranchEvaluation::Cleanable(candidate) => Ok(Some(candidate)),
+        BranchEvaluation::Blocked(_) => Ok(None),
+    }
+}
+
 fn clean_candidate_from_deleted_step(
     step: deleted_local::DeletedLocalBranchStep,
 ) -> CleanCandidate {
@@ -289,11 +318,23 @@ pub(crate) fn branch_is_integrated(
     parent_branch_name: &str,
     branch_name: &str,
 ) -> io::Result<bool> {
+    branch_is_integrated_for_pull_request(parent_branch_name, branch_name, None)
+}
+
+fn branch_is_integrated_for_pull_request(
+    parent_branch_name: &str,
+    branch_name: &str,
+    tracked_pull_request_number: Option<u64>,
+) -> io::Result<bool> {
     if branch_is_integrated_by_cherry(parent_branch_name, branch_name)? {
         return Ok(true);
     }
 
-    branch_is_integrated_by_squash_message(parent_branch_name, branch_name)
+    branch_is_integrated_by_squash_message(
+        parent_branch_name,
+        branch_name,
+        tracked_pull_request_number,
+    )
 }
 
 fn resolve_remote_parent_base(parent_branch_name: &str) -> io::Result<Option<RestackBaseTarget>> {
@@ -322,6 +363,7 @@ fn branch_is_integrated_by_cherry(parent_branch_name: &str, branch_name: &str) -
 fn branch_is_integrated_by_squash_message(
     parent_branch_name: &str,
     branch_name: &str,
+    tracked_pull_request_number: Option<u64>,
 ) -> io::Result<bool> {
     let merge_base = git::merge_base(parent_branch_name, branch_name)?;
     let branch_commits = git::commit_metadata_in_range(&format!("{merge_base}..{branch_name}"))?;
@@ -335,6 +377,9 @@ fn branch_is_integrated_by_squash_message(
 
     Ok(parent_commits.iter().any(|parent_commit| {
         parent_commit_mentions_all_branch_commits(parent_commit, &branch_commits)
+            || tracked_pull_request_number.is_some_and(|number| {
+                parent_commit_mentions_tracked_pull_request(parent_commit, number)
+            })
     }))
 }
 
@@ -359,4 +404,21 @@ pub(super) fn parent_commit_mentions_all_branch_commits(
     branch_commits
         .iter()
         .all(|branch_commit| message_lines.contains(branch_commit.subject.as_str()))
+}
+
+pub(super) fn parent_commit_mentions_tracked_pull_request(
+    parent_commit: &CommitMetadata,
+    pull_request_number: u64,
+) -> bool {
+    let tracked_pull_request_suffix = format!("(#{pull_request_number})");
+    let tracked_pull_request_ref = format!("pull request #{pull_request_number}");
+    let tracked_pull_request_url = format!("/pull/{pull_request_number}");
+    let subject = parent_commit.subject.to_ascii_lowercase();
+    let body = parent_commit.body.to_ascii_lowercase();
+
+    [subject.as_str(), body.as_str()].iter().any(|text| {
+        text.contains(&tracked_pull_request_suffix)
+            || text.contains(&tracked_pull_request_ref)
+            || text.contains(&tracked_pull_request_url)
+    })
 }

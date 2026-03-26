@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::io;
 use std::process::ExitStatus;
 
-use crate::core::clean::{self, CleanOptions};
+use crate::core::clean::{self, CleanOptions, CleanPlanMode};
 use crate::core::deleted_local;
 use crate::core::graph::BranchGraph;
 use crate::core::restack::{self, RestackAction, RestackPreview};
@@ -294,6 +294,8 @@ fn execute_local_sync(
     mut progress: LocalSyncProgress,
     remote_sync_enabled: bool,
 ) -> io::Result<LocalSyncOutcome> {
+    let cleanup_mode = clean::mode_for_sync(remote_sync_enabled);
+
     loop {
         if let Some(step) = plan_deleted_local_branch_step(session)? {
             if let Some(outcome) = apply_deleted_local_branch_step(
@@ -309,7 +311,7 @@ fn execute_local_sync(
             continue;
         }
 
-        if let Some(step) = plan_outdated_branch_step(session)? {
+        if let Some(step) = plan_outdated_branch_step(session, cleanup_mode)? {
             if let Some(outcome) = apply_outdated_branch_step(
                 session,
                 &original_branch,
@@ -386,6 +388,7 @@ fn apply_deleted_local_branch_step(
 
 fn plan_outdated_branch_step(
     session: &crate::core::store::StoreSession,
+    cleanup_mode: CleanPlanMode,
 ) -> io::Result<Option<OutdatedBranchStep>> {
     let graph = BranchGraph::new(&session.state);
     let mut candidates = session
@@ -405,6 +408,17 @@ fn plan_outdated_branch_step(
 
     for node in candidates {
         if !git::branch_exists(&node.branch_name)? {
+            continue;
+        }
+
+        if clean::cleanup_candidate_for_branch(
+            &session.state,
+            &session.config.trunk_branch,
+            &node,
+            cleanup_mode,
+        )?
+        .is_some()
+        {
             continue;
         }
 
