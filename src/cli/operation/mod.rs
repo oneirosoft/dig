@@ -149,8 +149,10 @@ pub fn render_sections(sections: &[OperationSection], final_view: bool) -> Strin
 fn render_section(section: &OperationSection, final_view: bool) -> String {
     let roots = if final_view
         && section.promote_children_on_deleted_root
-        && matches!(section.root.status, BranchStatus::Deleted | BranchStatus::Archived)
-    {
+        && matches!(
+            section.root.status,
+            BranchStatus::Deleted | BranchStatus::Archived
+        ) {
         section.root.children.as_slice()
     } else {
         std::slice::from_ref(&section.root)

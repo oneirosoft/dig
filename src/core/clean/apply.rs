@@ -5,9 +5,8 @@ use crate::core::git;
 use crate::core::graph::BranchGraph;
 use crate::core::restack;
 use crate::core::store::{
-    BranchArchiveReason,
-    PendingCleanCandidate, PendingCleanCandidateKind, PendingCleanOperation, PendingOperationKind,
-    PendingOperationState, open_initialized, record_branch_archived,
+    BranchArchiveReason, PendingCleanCandidate, PendingCleanCandidateKind, PendingCleanOperation,
+    PendingOperationKind, PendingOperationState, open_initialized, record_branch_archived,
 };
 use crate::core::workflow::{self, RestackExecutionEvent};
 
@@ -308,8 +307,8 @@ where
             )?,
         )?,
         PendingCleanCandidateKind::IntegratedIntoParent => {
-            let Some(parent_branch_name) =
-                BranchGraph::new(&session.state).parent_branch_name(&node, &session.config.trunk_branch)
+            let Some(parent_branch_name) = BranchGraph::new(&session.state)
+                .parent_branch_name(&node, &session.config.trunk_branch)
             else {
                 return Err(io::Error::other(format!(
                     "tracked parent for '{}' is missing from dig",
@@ -422,12 +421,16 @@ where
     }
 }
 
-fn pending_clean_candidate_from_clean_candidate(candidate: &CleanCandidate) -> PendingCleanCandidate {
+fn pending_clean_candidate_from_clean_candidate(
+    candidate: &CleanCandidate,
+) -> PendingCleanCandidate {
     PendingCleanCandidate {
         branch_name: candidate.branch_name.clone(),
         kind: match &candidate.reason {
             CleanReason::DeletedLocally => PendingCleanCandidateKind::DeletedLocally,
-            CleanReason::IntegratedIntoParent { .. } => PendingCleanCandidateKind::IntegratedIntoParent,
+            CleanReason::IntegratedIntoParent { .. } => {
+                PendingCleanCandidateKind::IntegratedIntoParent
+            }
         },
     }
 }

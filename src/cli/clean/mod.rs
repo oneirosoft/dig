@@ -79,10 +79,14 @@ pub(crate) fn format_clean_plan(plan: &CleanPlan) -> String {
     let mut sections = Vec::new();
 
     if !deleted_candidates.is_empty() {
-        let mut lines = vec!["Tracked branches missing locally and ready to stop tracking:".to_string()];
+        let mut lines =
+            vec!["Tracked branches missing locally and ready to stop tracking:".to_string()];
 
         for candidate in deleted_candidates {
-            lines.push(format!("- {} no longer exists locally", candidate.branch_name));
+            lines.push(format!(
+                "- {} no longer exists locally",
+                candidate.branch_name
+            ));
 
             for restack in &candidate.restack_plan {
                 lines.push(format!(
@@ -166,8 +170,16 @@ fn format_blocked_branch(blocked: &crate::core::clean::BlockedBranch) -> String 
 pub(crate) fn confirm_cleanup(plan: &CleanPlan) -> io::Result<bool> {
     let missing_count = plan.deleted_local_count();
     let merged_count = plan.merged_count();
-    let merged_label = if merged_count == 1 { "branch" } else { "branches" };
-    let missing_label = if missing_count == 1 { "branch" } else { "branches" };
+    let merged_label = if merged_count == 1 {
+        "branch"
+    } else {
+        "branches"
+    };
+    let missing_label = if missing_count == 1 {
+        "branch"
+    } else {
+        "branches"
+    };
 
     let prompt = match (missing_count, merged_count) {
         (0, merged) => format!("Delete {merged} merged {merged_label}? [y/N] "),

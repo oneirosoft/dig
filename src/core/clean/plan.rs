@@ -62,14 +62,11 @@ fn plan_for_requested_branch(
     };
 
     if !git::branch_exists(&node.branch_name)? {
-        let candidates = deleted_local::collect_deleted_local_subtree_steps(
-            state,
-            trunk_branch,
-            node.id,
-        )?
-        .into_iter()
-        .map(clean_candidate_from_deleted_step)
-        .collect();
+        let candidates =
+            deleted_local::collect_deleted_local_subtree_steps(state, trunk_branch, node.id)?
+                .into_iter()
+                .map(clean_candidate_from_deleted_step)
+                .collect();
 
         return Ok(CleanPlan {
             trunk_branch: trunk_branch.to_string(),
@@ -236,7 +233,9 @@ fn evaluate_integrated_branch(
     }))
 }
 
-fn clean_candidate_from_deleted_step(step: deleted_local::DeletedLocalBranchStep) -> CleanCandidate {
+fn clean_candidate_from_deleted_step(
+    step: deleted_local::DeletedLocalBranchStep,
+) -> CleanCandidate {
     CleanCandidate {
         node_id: step.node_id,
         branch_name: step.branch_name,

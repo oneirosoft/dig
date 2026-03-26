@@ -2,11 +2,11 @@ use std::io;
 
 use uuid::Uuid;
 
+use crate::core::git;
 use crate::core::graph::{BranchGraph, BranchTreeNode};
 use crate::core::restack::{self, RestackAction, RestackPreview};
 use crate::core::store::types::DigState;
 use crate::core::store::{BranchArchiveReason, ParentRef, StoreSession, record_branch_archived};
-use crate::core::git;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DeletedLocalBranchStep {
@@ -95,7 +95,9 @@ fn collect_deleted_local_steps_with_scope(
     let mut simulated_state = state.clone();
     let mut steps = Vec::new();
 
-    while let Some(step) = next_deleted_local_step_with_scope(&simulated_state, trunk_branch, scope)? {
+    while let Some(step) =
+        next_deleted_local_step_with_scope(&simulated_state, trunk_branch, scope)?
+    {
         simulate_deleted_local_step(&mut simulated_state, &step)?;
         steps.push(step);
     }
@@ -117,7 +119,11 @@ fn next_deleted_local_step_with_scope(
         };
 
         if !git::branch_exists(&node.branch_name)? {
-            missing_nodes.push((graph.branch_depth(node.id), node.branch_name.clone(), node.id));
+            missing_nodes.push((
+                graph.branch_depth(node.id),
+                node.branch_name.clone(),
+                node.id,
+            ));
         }
     }
 
@@ -154,9 +160,10 @@ fn plan_deleted_local_step(
     trunk_branch: &str,
     node_id: Uuid,
 ) -> io::Result<DeletedLocalBranchStep> {
-    let node = state.find_branch_by_id(node_id).cloned().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "tracked branch was not found")
-    })?;
+    let node = state
+        .find_branch_by_id(node_id)
+        .cloned()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "tracked branch was not found"))?;
     let graph = BranchGraph::new(state);
     let (new_parent_branch_name, new_parent) =
         resolve_replacement_parent(state, trunk_branch, &node.parent)?;

@@ -22,9 +22,7 @@ fn clean_untracks_deleted_middle_branch_and_restacks_descendants() {
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
 
         assert!(output.status.success());
-        assert!(stdout.contains(
-            "Tracked branches missing locally and ready to stop tracking:"
-        ));
+        assert!(stdout.contains("Tracked branches missing locally and ready to stop tracking:"));
         assert!(stdout.contains("Stop tracking 1 missing branch? [y/N]"));
         assert!(stdout.contains("No longer tracked by dig:"));
         assert!(stdout.contains("- feat/auth"));
@@ -96,9 +94,9 @@ fn clean_untracks_missing_branches_before_cleaning_newly_unblocked_merged_parent
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
 
         assert!(output.status.success());
-        assert!(stdout.contains(
-            "Delete 1 merged branch and stop tracking 1 missing branch? [y/N]"
-        ));
+        assert!(
+            stdout.contains("Delete 1 merged branch and stop tracking 1 missing branch? [y/N]")
+        );
         assert!(stdout.contains("No longer tracked by dig:"));
         assert!(stdout.contains("- feat/users"));
         assert!(stdout.contains("Deleted:"));
