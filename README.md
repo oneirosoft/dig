@@ -166,3 +166,15 @@ dig sync --continue
 If the next descendant also conflicts, repeat the same process and run `dig sync --continue` again.
 
 While an operation is paused, start by finishing or aborting that rebase before running more `dig` workflow commands. If you abort with `git rebase --abort`, rerun the original `dig` command after the rebase state has been cleared.
+
+## License
+
+`dig` is licensed under the GNU General Public License, version 3 or, at your option, any later version. See [LICENSE](LICENSE) for the full text.
+
+Copyright (C) 2026 Mark Pro. See [COPYRIGHT](COPYRIGHT) for the project copyright notice.
+
+Commercial use of `dig` is allowed. You may use `dig` in commercial environments, on private repositories, and on proprietary codebases.
+
+Using `dig` as a tool against a repository does not by itself change the license of that repository or require that repository to be open source. In other words, running `dig` on your project does not impose the GPL on your project's source code merely because `dig` was used as part of the workflow.
+
+If you modify and redistribute `dig` itself, or distribute a larger combined work that incorporates `dig`'s GPL-covered code, those distributions must comply with the GPL.
