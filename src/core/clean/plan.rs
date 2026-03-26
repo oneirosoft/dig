@@ -185,7 +185,10 @@ fn evaluate_branch(
     }))
 }
 
-fn branch_is_integrated(parent_branch_name: &str, branch_name: &str) -> io::Result<bool> {
+pub(crate) fn branch_is_integrated(
+    parent_branch_name: &str,
+    branch_name: &str,
+) -> io::Result<bool> {
     if branch_is_integrated_by_cherry(parent_branch_name, branch_name)? {
         return Ok(true);
     }

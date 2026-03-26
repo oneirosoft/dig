@@ -2,6 +2,7 @@ use std::io;
 
 use clap::Args;
 
+use crate::core::clean;
 use crate::core::merge;
 use crate::core::sync::{self, SyncCompletion, SyncOptions};
 use crate::core::tree;
@@ -18,6 +19,7 @@ pub struct SyncArgs {
 
 pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
     let outcome = sync::run(&args.clone().into())?;
+    let mut final_status = outcome.status;
 
     if let Some(completion) = &outcome.completion {
         match completion {
@@ -87,6 +89,48 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
                     println!("{output}");
                 }
             }
+            SyncCompletion::Full(full_outcome) if outcome.status.success() => {
+                let summary = format_full_sync_summary(full_outcome);
+                if !summary.is_empty() {
+                    println!("{summary}");
+                }
+
+                if !full_outcome.cleanup_plan.candidates.is_empty() {
+                    if !summary.is_empty() {
+                        println!();
+                    }
+
+                    println!(
+                        "{}",
+                        super::clean::format_clean_plan(&full_outcome.cleanup_plan)
+                    );
+
+                    if !super::clean::confirm_cleanup(full_outcome.cleanup_plan.candidates.len())? {
+                        println!("Skipped cleanup.");
+                    } else {
+                        println!();
+
+                        let clean_outcome = clean::apply(&full_outcome.cleanup_plan)?;
+                        final_status = clean_outcome.status;
+
+                        if clean_outcome.status.success() {
+                            let output = super::clean::format_clean_success_output(
+                                &full_outcome.cleanup_plan.trunk_branch,
+                                &clean_outcome,
+                            );
+                            if !output.is_empty() {
+                                println!("{output}");
+                            }
+                        } else if clean_outcome.paused {
+                            common::print_restack_pause_guidance(
+                                clean_outcome.failure_output.as_deref(),
+                            );
+                        } else {
+                            common::print_trimmed_stderr(clean_outcome.failure_output.as_deref());
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -100,7 +144,7 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
     }
 
     Ok(CommandOutcome {
-        status: outcome.status,
+        status: final_status,
     })
 }
 
@@ -110,6 +154,30 @@ impl From<SyncArgs> for SyncOptions {
             continue_operation: args.continue_operation,
         }
     }
+}
+
+fn format_full_sync_summary(outcome: &sync::FullSyncOutcome) -> String {
+    let mut sections = Vec::new();
+
+    if !outcome.deleted_branches.is_empty() {
+        let mut lines = vec!["Deleted locally and no longer tracked by dig:".to_string()];
+        for branch_name in &outcome.deleted_branches {
+            lines.push(format!("- {branch_name}"));
+        }
+        sections.push(lines.join("\n"));
+    }
+
+    if !outcome.restacked_branches.is_empty() {
+        sections.push(common::format_restacked_branches(
+            &outcome.restacked_branches,
+        ));
+    }
+
+    if sections.is_empty() && outcome.cleanup_plan.candidates.is_empty() {
+        return "Local stacks are already in sync.".to_string();
+    }
+
+    common::join_sections(&sections)
 }
 
 #[cfg(test)]

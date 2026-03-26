@@ -71,16 +71,35 @@ dig branch <name> -p <parent>   # create a tracked branch under a specific paren
 dig tree                        # show the full tracked branch tree
 dig tree --branch <branch>      # show one branch and its descendants
 dig commit -m "message"         # commit and restack tracked descendants if needed
+dig sync                        # reconcile local dig state, restack stale stacks, then offer cleanup
+dig sync --continue             # continue a paused restack after resolving conflicts
 dig merge <branch>              # merge a tracked branch into its tracked parent
 dig clean                       # remove tracked branches already merged into their parent
 dig adopt <branch> -p <parent>  # start tracking an existing local branch
 dig orphan <branch>             # stop tracking a branch but keep the local branch
-dig sync --continue             # continue a paused restack after resolving conflicts
 ```
+
+### Sync local stacks
+
+Run `dig sync` when local Git state and dig's tracked stack metadata may have drifted apart:
+
+```bash
+dig sync
+```
+
+Today `dig sync` is local-only. It will:
+
+1. Stop tracking branches that were deleted locally but are still tracked by dig.
+2. Restack tracked branches whose parent branch has moved ahead.
+3. Offer the existing cleanup flow for tracked branches already merged into their parent.
+
+If cleanup finds merged branches, `dig sync` reuses the same delete prompt as `dig clean`. If you decline that prompt, sync still succeeds and leaves cleanup for later.
+
+Remote sync is intentionally out of scope for now. Future GitHub and `gh` integration can extend `dig sync`, but the current command only reconciles local branches and local dig state.
 
 ### Resolve paused commands
 
-Some commands, including `dig commit`, `dig adopt`, `dig merge`, `dig clean`, and `dig orphan`, may pause if `dig` hits a rebase conflict while restacking tracked descendants.
+Some commands, including `dig commit`, `dig adopt`, `dig merge`, `dig clean`, `dig orphan`, and `dig sync`, may pause if `dig` hits a rebase conflict while restacking tracked descendants.
 
 When that happens:
 

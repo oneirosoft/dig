@@ -22,5 +22,6 @@ pub(crate) use types::{
     BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchCreatedEvent, BranchNode,
     BranchReparentedEvent, DigConfig, DigEvent, ParentRef, PendingAdoptOperation,
     PendingCleanOperation, PendingCommitEntry, PendingCommitOperation, PendingMergeOperation,
-    PendingOperationKind, PendingOperationState, PendingOrphanOperation, now_unix_timestamp_secs,
+    PendingOperationKind, PendingOperationState, PendingOrphanOperation, PendingSyncOperation,
+    PendingSyncPhase, now_unix_timestamp_secs,
 };

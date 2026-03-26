@@ -165,6 +165,7 @@ pub enum PendingOperationKind {
     Merge(PendingMergeOperation),
     Clean(PendingCleanOperation),
     Orphan(PendingOrphanOperation),
+    Sync(PendingSyncOperation),
 }
 
 impl PendingOperationKind {
@@ -175,6 +176,7 @@ impl PendingOperationKind {
             Self::Merge(_) => "merge",
             Self::Clean(_) => "clean",
             Self::Orphan(_) => "orphan",
+            Self::Sync(_) => "sync",
         }
     }
 }
@@ -220,6 +222,22 @@ pub struct PendingOrphanOperation {
     pub branch_name: String,
     pub parent_branch_name: String,
     pub node_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingSyncOperation {
+    pub original_branch: String,
+    pub deleted_branches: Vec<String>,
+    pub restacked_branches: Vec<RestackPreview>,
+    pub phase: PendingSyncPhase,
+    pub step_branch_name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingSyncPhase {
+    ReconcileDeletedLocalBranches,
+    RestackOutdatedLocalStacks,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,6 +293,7 @@ pub struct BranchAdoptedEvent {
 pub enum BranchArchiveReason {
     IntegratedIntoParent { parent_branch: String },
     Orphaned,
+    DeletedLocally,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -308,7 +327,7 @@ mod tests {
     use super::{
         BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchNode, DigConfig,
         DigEvent, DigState, ParentRef, PendingCommitOperation, PendingOperationKind,
-        PendingOperationState, PendingOrphanOperation,
+        PendingOperationState, PendingOrphanOperation, PendingSyncOperation, PendingSyncPhase,
     };
     use crate::core::restack::RestackAction;
     use uuid::Uuid;
@@ -443,5 +462,33 @@ mod tests {
         });
 
         assert_eq!(operation.command_name(), "orphan");
+    }
+
+    #[test]
+    fn reports_sync_operation_command_name() {
+        let operation = PendingOperationKind::Sync(PendingSyncOperation {
+            original_branch: "feature/api".into(),
+            deleted_branches: vec!["feature/missing".into()],
+            restacked_branches: Vec::new(),
+            phase: PendingSyncPhase::ReconcileDeletedLocalBranches,
+            step_branch_name: "feature/missing".into(),
+        });
+
+        assert_eq!(operation.command_name(), "sync");
+    }
+
+    #[test]
+    fn serializes_deleted_locally_branch_archive_event() {
+        let event = DigEvent::BranchArchived(BranchArchivedEvent {
+            occurred_at_unix_secs: 1,
+            branch_id: Uuid::nil(),
+            branch_name: "feature/api".into(),
+            reason: BranchArchiveReason::DeletedLocally,
+        });
+
+        let serialized = serde_json::to_string(&event).unwrap();
+
+        assert!(serialized.contains("\"type\":\"branch_archived\""));
+        assert!(serialized.contains("\"kind\":\"deleted_locally\""));
     }
 }

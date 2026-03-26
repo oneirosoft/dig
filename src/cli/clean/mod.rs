@@ -66,7 +66,7 @@ impl From<CleanArgs> for CleanOptions {
     }
 }
 
-fn format_clean_plan(plan: &CleanPlan) -> String {
+pub(crate) fn format_clean_plan(plan: &CleanPlan) -> String {
     let mut lines = vec!["Merged branches ready to clean:".to_string()];
 
     for candidate in &plan.candidates {
@@ -127,7 +127,7 @@ fn format_blocked_branch(blocked: &crate::core::clean::BlockedBranch) -> String 
     }
 }
 
-fn confirm_cleanup(branch_count: usize) -> io::Result<bool> {
+pub(crate) fn confirm_cleanup(branch_count: usize) -> io::Result<bool> {
     let label = if branch_count == 1 {
         "branch"
     } else {

@@ -90,6 +90,78 @@ pub fn plan_after_branch_advance(
     Ok(actions)
 }
 
+pub fn plan_after_branch_rebase(
+    state: &DigState,
+    rebased_node_id: Uuid,
+    rebased_branch_name: &str,
+    old_upstream_oid: &str,
+    old_head_oid: &str,
+    new_base_branch_name: &str,
+) -> io::Result<Vec<RestackAction>> {
+    load_active_branch_node(state, rebased_node_id)?;
+
+    let mut actions = vec![RestackAction {
+        node_id: rebased_node_id,
+        branch_name: rebased_branch_name.to_string(),
+        old_upstream_branch_name: new_base_branch_name.to_string(),
+        old_upstream_oid: old_upstream_oid.to_string(),
+        new_base_branch_name: new_base_branch_name.to_string(),
+        new_parent: None,
+    }];
+
+    let graph = BranchGraph::new(state);
+    for child_id in graph.active_children_ids(rebased_node_id) {
+        collect_branch_advance_actions(
+            state,
+            child_id,
+            rebased_branch_name,
+            old_head_oid,
+            rebased_branch_name,
+            &mut actions,
+        )?;
+    }
+
+    Ok(actions)
+}
+
+pub fn plan_after_deleted_branch(
+    state: &DigState,
+    deleted_node_id: Uuid,
+    deleted_branch_name: &str,
+    new_parent_branch_name: &str,
+    new_parent: &ParentRef,
+) -> io::Result<Vec<RestackAction>> {
+    let graph = BranchGraph::new(state);
+    let mut actions = Vec::new();
+
+    for child_id in graph.active_children_ids(deleted_node_id) {
+        let child = load_active_branch_node(state, child_id)?;
+        let old_upstream_oid = git::merge_base(new_parent_branch_name, &child.branch_name)?;
+        let old_head_oid = git::ref_oid(&child.branch_name)?;
+        actions.push(RestackAction {
+            node_id: child_id,
+            branch_name: child.branch_name.clone(),
+            old_upstream_branch_name: deleted_branch_name.to_string(),
+            old_upstream_oid,
+            new_base_branch_name: new_parent_branch_name.to_string(),
+            new_parent: Some(new_parent.clone()),
+        });
+
+        for grandchild_id in BranchGraph::new(state).active_children_ids(child_id) {
+            collect_branch_advance_actions(
+                state,
+                grandchild_id,
+                &child.branch_name,
+                &old_head_oid,
+                &child.branch_name,
+                &mut actions,
+            )?;
+        }
+    }
+
+    Ok(actions)
+}
+
 pub fn previews_for_actions(actions: &[RestackAction]) -> Vec<RestackPreview> {
     actions
         .iter()
