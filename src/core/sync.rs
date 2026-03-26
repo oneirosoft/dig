@@ -50,6 +50,7 @@ pub struct SyncOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemotePushActionKind {
     CreateRemoteBranch,
+    UpdateRemoteBranch,
     ForceUpdateRemoteBranch,
 }
 
@@ -618,7 +619,9 @@ pub fn execute_remote_push_plan(plan: &RemotePushPlan) -> io::Result<RemotePushO
 
     for action in &plan.actions {
         let push_output = match action.kind {
-            RemotePushActionKind::CreateRemoteBranch => git::push_branch_to_remote(&action.target)?,
+            RemotePushActionKind::CreateRemoteBranch | RemotePushActionKind::UpdateRemoteBranch => {
+                git::push_branch_to_remote(&action.target)?
+            }
             RemotePushActionKind::ForceUpdateRemoteBranch => {
                 git::force_push_branch_to_remote_with_lease(&action.target)?
             }
@@ -685,10 +688,24 @@ fn plan_remote_push_action(
         }));
     };
 
-    if allow_force_update && remote_oid != git::ref_oid(branch_name)? {
+    let local_oid = git::ref_oid(branch_name)?;
+    if remote_oid == local_oid {
+        return Ok(None);
+    }
+
+    if allow_force_update {
         return Ok(Some(RemotePushAction {
             target,
             kind: RemotePushActionKind::ForceUpdateRemoteBranch,
+        }));
+    }
+
+    let remote_tracking_branch_ref =
+        git::remote_tracking_branch_ref(&target.remote_name, &target.branch_name);
+    if git::merge_base(&remote_tracking_branch_ref, branch_name)? == remote_oid {
+        return Ok(Some(RemotePushAction {
+            target,
+            kind: RemotePushActionKind::UpdateRemoteBranch,
         }));
     }
 
@@ -747,6 +764,32 @@ mod tests {
                 plan.actions
                     .iter()
                     .all(|action| action.target.branch_name != "feat/merged")
+            );
+        });
+    }
+
+    #[test]
+    fn plans_fast_forward_pushes_for_active_branches_ahead_of_remote() {
+        with_temp_repo("dig-sync-core", |repo| {
+            initialize_main_repo(repo);
+            initialize_origin_remote(repo);
+            create_tracked_branch("feat/auth");
+            commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+            git_ok(repo, &["push", "-u", "origin", "feat/auth"]);
+            append_file(
+                repo,
+                "auth.txt",
+                "auth local\n",
+                "feat: auth local follow-up",
+            );
+
+            let plan = plan_remote_pushes(&[], &[]).unwrap();
+
+            assert_eq!(plan.actions.len(), 1);
+            assert_eq!(plan.actions[0].target.branch_name, "feat/auth");
+            assert_eq!(
+                plan.actions[0].kind,
+                RemotePushActionKind::UpdateRemoteBranch
             );
         });
     }

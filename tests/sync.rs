@@ -754,6 +754,34 @@ fn sync_prompts_to_push_missing_remote_branch_after_local_sync() {
 }
 
 #[test]
+fn sync_prompts_to_push_active_branch_ahead_of_remote() {
+    with_temp_repo("dig-sync-cli", |repo| {
+        initialize_main_repo(repo);
+        initialize_origin_remote(repo);
+        dig_ok(repo, &["init"]);
+        dig_ok(repo, &["branch", "feat/auth"]);
+        commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+        git_ok(repo, &["push", "-u", "origin", "feat/auth"]);
+        commit_file(repo, "auth.txt", "auth v2\n", "feat: auth follow-up");
+
+        let output = dig_with_input(repo, &["sync"], "y\n");
+        let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
+
+        assert!(output.status.success());
+        assert!(stdout.contains("Local stacks are already in sync."));
+        assert!(stdout.contains("Remote branches to update:"));
+        assert!(stdout.contains("- push feat/auth on origin"));
+        assert!(stdout.contains("Push these remote updates? [y/N]"));
+        assert!(stdout.contains("Updated remote branches:"));
+        assert!(stdout.contains("- pushed feat/auth on origin"));
+        assert_eq!(
+            git_stdout(repo, &["rev-parse", "feat/auth"]),
+            git_stdout(repo, &["rev-parse", "origin/feat/auth"])
+        );
+    });
+}
+
+#[test]
 fn sync_continues_paused_remote_cleanup_with_stored_remote_rebase_target() {
     with_temp_repo("dig-sync-cli", |repo| {
         initialize_main_repo(repo);
