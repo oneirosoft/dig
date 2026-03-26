@@ -1,0 +1,166 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify_tag_on_main:
+    name: Verify Tagged Commit
+    runs-on: ubuntu-24.04
+    outputs:
+      tag_commit: ${{ steps.resolve_tag.outputs.sha }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tagged commit
+        id: resolve_tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_commit="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
+          echo "sha=$tag_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tagged commit is on origin/main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "${{ steps.resolve_tag.outputs.sha }}" origin/main; then
+            echo "::error::Tag ${GITHUB_REF_NAME} points to commit ${{ steps.resolve_tag.outputs.sha }}, which is not reachable from origin/main."
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: verify_tag_on_main
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs_on: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+          - runs_on: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive_ext: tar.gz
+          - runs_on: windows-2025
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+          - runs_on: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive_ext: zip
+          - runs_on: macos-15-intel
+            target: x86_64-apple-darwin
+            archive_ext: tar.gz
+          - runs_on: macos-15
+            target: aarch64-apple-darwin
+            archive_ext: tar.gz
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.runs_on }}-${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Package release archive on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="dig-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+          package_dir="dist/package"
+          mkdir -p "$package_dir"
+          cp "target/${{ matrix.target }}/release/dig" "$package_dir/dig"
+          cp README.md "$package_dir/README.md"
+          tar -C "$package_dir" -czf "dist/$archive" dig README.md
+
+      - name: Package release archive on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $packageDir = Join-Path "dist" "package"
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/dig.exe" (Join-Path $packageDir "dig.exe")
+          Copy-Item "README.md" (Join-Path $packageDir "README.md")
+          $archive = Join-Path "dist" "dig-$env:GITHUB_REF_NAME-${{ matrix.target }}.zip"
+          Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath $archive -Force
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/dig-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-artifacts
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-artifacts
+          shopt -s nullglob
+          files=(dig-*)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No release artifacts were downloaded." >&2
+            exit 1
+          fi
+          printf '%s\0' "${files[@]}" | sort -z | xargs -0 sha256sum > SHA256SUMS
+
+      - name: Create or update release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists."
+            if [[ "$tag" == *-* ]]; then
+              gh release edit "$tag" --prerelease
+            fi
+          else
+            create_args=(release create "$tag" --verify-tag --generate-notes)
+            if [[ "$tag" == *-* ]]; then
+              create_args+=(--prerelease)
+            fi
+            gh "${create_args[@]}"
+          fi
+
+          gh release upload "$tag" release-artifacts/* --clobber
