@@ -53,6 +53,10 @@ impl DigState {
             .find(|node| !node.archived && node.id == node_id)
     }
 
+    pub fn find_any_branch_by_id(&self, node_id: Uuid) -> Option<&BranchNode> {
+        self.nodes.iter().find(|node| node.id == node_id)
+    }
+
     pub fn find_branch_by_id_mut(&mut self, node_id: Uuid) -> Option<&mut BranchNode> {
         self.nodes
             .iter_mut()

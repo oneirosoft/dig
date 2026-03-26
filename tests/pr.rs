@@ -3,6 +3,7 @@ mod support;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde_json::json;
 use support::{
     dig_ok, dig_ok_with_env, dig_with_input_and_env, find_node, git_binary_path, git_ok,
     git_stdout, initialize_main_repo, install_fake_executable, load_events_json, load_state_json,
@@ -21,6 +22,21 @@ fn install_fake_gh(repo: &Path, script: &str) -> (PathBuf, String, String) {
 
 fn clear_log(path: &str) {
     fs::write(path, "").unwrap();
+}
+
+fn track_pull_request_number(repo: &Path, branch_name: &str, number: u64) {
+    let state_path = repo.join(".git/dig/state.json");
+    let mut state = load_state_json(repo);
+    let nodes = state["nodes"].as_array_mut().unwrap();
+    let node = nodes
+        .iter_mut()
+        .find(|node| {
+            node["branch_name"].as_str() == Some(branch_name)
+                && node["archived"].as_bool() == Some(false)
+        })
+        .unwrap();
+    node["pull_request"] = json!({ "number": number });
+    fs::write(state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
 }
 
 fn initialize_origin_remote(repo: &Path) {
@@ -100,6 +116,64 @@ exit 1
         );
         assert!(
             gh_log.contains("pr create --base main --title feat-auth --body body-text --draft")
+        );
+    });
+}
+
+#[test]
+fn pr_merge_retargets_open_child_pull_request_before_merging_parent() {
+    with_temp_repo("dig-pr-cli", |repo| {
+        initialize_main_repo(repo);
+        dig_ok(repo, &["init"]);
+        dig_ok(repo, &["branch", "feat/auth"]);
+        track_pull_request_number(repo, "feat/auth", 123);
+        dig_ok(repo, &["branch", "feat/auth-ui"]);
+        track_pull_request_number(repo, "feat/auth-ui", 124);
+        git_ok(repo, &["checkout", "feat/auth"]);
+
+        let (_, path, log_path) = install_fake_gh(
+            repo,
+            r#"#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$DIG_TEST_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$3" = "124" ]; then
+  printf '{"number":124,"state":"OPEN","mergedAt":null,"baseRefName":"feat/auth","headRefName":"feat/auth-ui","headRefOid":"abc123","isDraft":false,"url":"https://github.com/acme/dig/pull/124"}\n'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "edit" ] && [ "$3" = "124" ] && [ "$4" = "--base" ] && [ "$5" = "main" ]; then
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "merge" ] && [ "$3" = "123" ] && [ "$4" = "--squash" ] && [ "$5" = "--delete-branch" ]; then
+  exit 0
+fi
+echo "unexpected gh args: $*" >&2
+exit 1
+"#,
+        );
+
+        let output = dig_ok_with_env(
+            repo,
+            &["pr", "merge"],
+            &[
+                ("PATH", path.as_str()),
+                ("DIG_TEST_GH_LOG", log_path.as_str()),
+            ],
+        );
+        let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
+        let gh_log = fs::read_to_string(log_path).unwrap();
+
+        assert!(stdout.contains("Retargeted child pull requests:"));
+        assert!(stdout.contains("- #124 for feat/auth-ui to main"));
+        assert!(stdout.contains("Merged pull request #123 for 'feat/auth' into 'main'."));
+
+        let lines = gh_log.lines().collect::<Vec<_>>();
+        assert_eq!(
+            lines,
+            vec![
+                "pr view 124 --json number,state,mergedAt,baseRefName,headRefName,headRefOid,isDraft,url",
+                "pr edit 124 --base main",
+                "pr merge 123 --squash --delete-branch",
+            ]
         );
     });
 }

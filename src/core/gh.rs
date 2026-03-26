@@ -19,6 +19,26 @@ pub struct PullRequestDetails {
     pub url: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PullRequestState {
+    Open,
+    Closed,
+    Merged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestStatus {
+    pub number: u64,
+    pub state: PullRequestState,
+    pub merged_at: Option<String>,
+    pub base_ref_name: String,
+    pub head_ref_name: String,
+    pub head_ref_oid: Option<String>,
+    pub is_draft: bool,
+    pub url: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatePullRequestOptions {
     pub base_branch_name: String,
@@ -72,6 +92,23 @@ struct PullRequestViewRecord {
 struct PullRequestDetailsRecord {
     number: u64,
     title: String,
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PullRequestStatusRecord {
+    number: u64,
+    state: PullRequestState,
+    #[serde(rename = "mergedAt")]
+    merged_at: Option<String>,
+    #[serde(rename = "baseRefName")]
+    base_ref_name: String,
+    #[serde(rename = "headRefName")]
+    head_ref_name: String,
+    #[serde(rename = "headRefOid", default)]
+    head_ref_oid: Option<String>,
+    #[serde(rename = "isDraft", default)]
+    is_draft: bool,
     url: String,
 }
 
@@ -132,6 +169,18 @@ pub fn create_pull_request(options: &CreatePullRequestOptions) -> io::Result<Cre
     view_pull_request_by_url(&url)
 }
 
+pub fn view_pull_request(number: u64) -> io::Result<PullRequestStatus> {
+    let output = run_gh_capture_output(&[
+        "pr".to_string(),
+        "view".to_string(),
+        number.to_string(),
+        "--json".to_string(),
+        "number,state,mergedAt,baseRefName,headRefName,headRefOid,isDraft,url".to_string(),
+    ])?;
+
+    parse_pull_request_status(&output.stdout)
+}
+
 pub fn list_open_pull_requests() -> io::Result<Vec<PullRequestDetails>> {
     let output = run_gh_capture_output(&[
         "pr".to_string(),
@@ -143,6 +192,55 @@ pub fn list_open_pull_requests() -> io::Result<Vec<PullRequestDetails>> {
     ])?;
 
     parse_open_pull_request_details(&output.stdout)
+}
+
+pub fn reopen_pull_request(number: u64) -> io::Result<()> {
+    run_gh_command(
+        "gh pr reopen",
+        &["pr".to_string(), "reopen".to_string(), number.to_string()],
+    )
+}
+
+pub fn mark_pull_request_as_draft(number: u64) -> io::Result<()> {
+    run_gh_command(
+        "gh pr ready --undo",
+        &[
+            "pr".to_string(),
+            "ready".to_string(),
+            number.to_string(),
+            "--undo".to_string(),
+        ],
+    )
+}
+
+pub fn retarget_pull_request_base(number: u64, base_branch_name: &str) -> io::Result<()> {
+    run_gh_command(
+        "gh pr edit --base",
+        &[
+            "pr".to_string(),
+            "edit".to_string(),
+            number.to_string(),
+            "--base".to_string(),
+            base_branch_name.to_string(),
+        ],
+    )
+}
+
+pub fn edit_pull_request_base(number: u64, base_branch_name: &str) -> io::Result<()> {
+    retarget_pull_request_base(number, base_branch_name)
+}
+
+pub fn merge_pull_request(number: u64) -> io::Result<()> {
+    run_gh_command(
+        "gh pr merge",
+        &[
+            "pr".to_string(),
+            "merge".to_string(),
+            number.to_string(),
+            "--squash".to_string(),
+            "--delete-branch".to_string(),
+        ],
+    )
 }
 
 pub fn open_current_pull_request_in_browser() -> io::Result<()> {
@@ -207,6 +305,22 @@ fn parse_open_pull_request_details(stdout: &str) -> io::Result<Vec<PullRequestDe
             url: record.url,
         })
         .collect())
+}
+
+fn parse_pull_request_status(stdout: &str) -> io::Result<PullRequestStatus> {
+    let record: PullRequestStatusRecord = serde_json::from_str(stdout)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+
+    Ok(PullRequestStatus {
+        number: record.number,
+        state: record.state,
+        merged_at: record.merged_at,
+        base_ref_name: record.base_ref_name,
+        head_ref_name: record.head_ref_name,
+        head_ref_oid: record.head_ref_oid,
+        is_draft: record.is_draft,
+        url: record.url,
+    })
 }
 
 fn find_pull_request_url(output: &str) -> Option<String> {
@@ -369,8 +483,8 @@ fn looks_like_auth_error(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        find_pull_request_url, parse_open_pull_request_details, parse_open_pull_requests,
-        pull_request_number_from_url,
+        PullRequestState, find_pull_request_url, parse_open_pull_request_details,
+        parse_open_pull_requests, parse_pull_request_status, pull_request_number_from_url,
     };
 
     #[test]
@@ -393,6 +507,22 @@ mod tests {
         .unwrap();
 
         assert_eq!(pull_requests[0].title, "Auth PR");
+    }
+
+    #[test]
+    fn parses_pull_request_status_output() {
+        let pull_request = parse_pull_request_status(
+            r#"{"number":123,"state":"CLOSED","mergedAt":null,"baseRefName":"main","headRefName":"feat/auth","isDraft":false,"url":"https://github.com/acme/dig/pull/123"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(pull_request.number, 123);
+        assert_eq!(pull_request.state, PullRequestState::Closed);
+        assert_eq!(pull_request.base_ref_name, "main");
+        assert_eq!(pull_request.head_ref_name, "feat/auth");
+        assert_eq!(pull_request.head_ref_oid, None);
+        assert!(!pull_request.is_draft);
+        assert_eq!(pull_request.merged_at, None);
     }
 
     #[test]

@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::io;
 use std::process::ExitStatus;
 
-use crate::core::gh::{self, CreatePullRequestOptions, PullRequestDetails, PullRequestSummary};
+use crate::core::gh::{
+    self, CreatePullRequestOptions, PullRequestDetails, PullRequestState, PullRequestSummary,
+};
 use crate::core::git;
 use crate::core::graph::BranchGraph;
 use crate::core::store::{
@@ -53,6 +55,22 @@ pub struct PrListOutcome {
     pub status: ExitStatus,
     pub view: TrackedPullRequestListView,
     pub pull_requests: Vec<PullRequestDetails>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetargetedPullRequest {
+    pub branch_name: String,
+    pub pull_request_number: u64,
+    pub new_base_branch_name: String,
+}
+
+#[derive(Debug)]
+pub struct PrMergeOutcome {
+    pub status: ExitStatus,
+    pub branch_name: String,
+    pub base_branch_name: String,
+    pub pull_request_number: u64,
+    pub retargeted_pull_requests: Vec<RetargetedPullRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,6 +225,73 @@ pub fn current_branch_push_target_for_create() -> io::Result<Option<git::BranchP
         PrTrackingAction::Create => git::branch_push_target_if_needed(&branch_name),
         PrTrackingAction::Adopt(_) => Ok(None),
     }
+}
+
+pub fn merge_current_pull_request() -> io::Result<PrMergeOutcome> {
+    let session = open_initialized("dig is not initialized; run 'dig init' first")?;
+    workflow::ensure_no_pending_operation(&session.paths, "pr")?;
+    git::ensure_no_in_progress_operations(&session.repo, "pr")?;
+
+    let branch_name = git::current_branch_name_if_any()?.ok_or_else(|| {
+        io::Error::other("dig pr requires a named branch; detached HEAD is not supported")
+    })?;
+    let node = session
+        .state
+        .find_branch_by_name(&branch_name)
+        .cloned()
+        .ok_or_else(|| {
+            io::Error::other(format!("branch '{}' is not tracked by dig", branch_name))
+        })?;
+    let pull_request = node.pull_request.clone().ok_or_else(|| {
+        io::Error::other(format!(
+            "branch '{}' does not track a pull request",
+            branch_name
+        ))
+    })?;
+
+    let graph = BranchGraph::new(&session.state);
+    let base_branch_name = graph
+        .parent_branch_name(&node, &session.config.trunk_branch)
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "tracked parent branch for '{}' was not found",
+                branch_name
+            ))
+        })?;
+
+    let mut retargeted_pull_requests = Vec::new();
+    for child_id in graph.active_children_ids(node.id) {
+        let Some(child_node) = session.state.find_branch_by_id(child_id) else {
+            continue;
+        };
+        let Some(child_pull_request) = child_node.pull_request.as_ref() else {
+            continue;
+        };
+
+        let child_pull_request_status = gh::view_pull_request(child_pull_request.number)?;
+        if child_pull_request_status.state != PullRequestState::Open
+            || child_pull_request_status.base_ref_name == base_branch_name
+        {
+            continue;
+        }
+
+        gh::edit_pull_request_base(child_pull_request.number, &base_branch_name)?;
+        retargeted_pull_requests.push(RetargetedPullRequest {
+            branch_name: child_node.branch_name.clone(),
+            pull_request_number: child_pull_request.number,
+            new_base_branch_name: base_branch_name.clone(),
+        });
+    }
+
+    gh::merge_pull_request(pull_request.number)?;
+
+    Ok(PrMergeOutcome {
+        status: git::success_status()?,
+        branch_name,
+        base_branch_name,
+        pull_request_number: pull_request.number,
+        retargeted_pull_requests,
+    })
 }
 
 pub fn list_open_tracked_pull_requests() -> io::Result<PrListOutcome> {

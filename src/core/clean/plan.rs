@@ -206,12 +206,17 @@ fn evaluate_integrated_branch(
 
     let graph = BranchGraph::new(state);
 
-    let Some(parent_branch_name) = graph.parent_branch_name(node, trunk_branch) else {
-        return Ok(BranchEvaluation::Blocked(BlockedBranch {
-            branch_name: node.branch_name.clone(),
-            reason: CleanBlockReason::ParentMissingFromDig,
-        }));
-    };
+    let (local_parent_base, resolved_parent) =
+        match deleted_local::resolve_replacement_parent(state, trunk_branch, &node.parent) {
+            Ok(resolved) => resolved,
+            Err(_) => {
+                return Ok(BranchEvaluation::Blocked(BlockedBranch {
+                    branch_name: node.branch_name.clone(),
+                    reason: CleanBlockReason::ParentMissingFromDig,
+                }));
+            }
+        };
+    let parent_branch_name = local_parent_base.branch_name.clone();
 
     if !git::branch_exists(&parent_branch_name)? {
         return Ok(BranchEvaluation::Blocked(BlockedBranch {
@@ -232,7 +237,6 @@ fn evaluate_integrated_branch(
         }));
     }
 
-    let local_parent_base = RestackBaseTarget::local(&parent_branch_name);
     let tracked_pull_request_number = node.pull_request.as_ref().map(|pr| pr.number);
     let parent_base = if branch_is_integrated_for_pull_request(
         local_parent_base.rebase_ref(),
@@ -274,7 +278,7 @@ fn evaluate_integrated_branch(
         node.id,
         &node.branch_name,
         &parent_base,
-        &node.parent,
+        &resolved_parent,
     )?;
 
     Ok(BranchEvaluation::Cleanable(CleanCandidate {

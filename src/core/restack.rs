@@ -202,12 +202,52 @@ pub fn plan_after_deleted_branch(
     new_parent_base: &RestackBaseTarget,
     new_parent: &ParentRef,
 ) -> io::Result<Vec<RestackAction>> {
+    plan_after_deleted_branch_with_optional_old_upstream_override(
+        state,
+        deleted_node_id,
+        deleted_branch_name,
+        new_parent_base,
+        new_parent,
+        None,
+    )
+}
+
+#[cfg(test)]
+pub fn plan_after_deleted_branch_with_old_upstream_override(
+    state: &DigState,
+    deleted_node_id: Uuid,
+    deleted_branch_name: &str,
+    new_parent_base: &RestackBaseTarget,
+    new_parent: &ParentRef,
+    old_upstream_oid_override: &str,
+) -> io::Result<Vec<RestackAction>> {
+    plan_after_deleted_branch_with_optional_old_upstream_override(
+        state,
+        deleted_node_id,
+        deleted_branch_name,
+        new_parent_base,
+        new_parent,
+        Some(old_upstream_oid_override),
+    )
+}
+
+fn plan_after_deleted_branch_with_optional_old_upstream_override(
+    state: &DigState,
+    deleted_node_id: Uuid,
+    deleted_branch_name: &str,
+    new_parent_base: &RestackBaseTarget,
+    new_parent: &ParentRef,
+    old_upstream_oid_override: Option<&str>,
+) -> io::Result<Vec<RestackAction>> {
     let graph = BranchGraph::new(state);
     let mut actions = Vec::new();
 
     for child_id in graph.active_children_ids(deleted_node_id) {
         let child = load_active_branch_node(state, child_id)?;
-        let old_upstream_oid = git::merge_base(new_parent_base.rebase_ref(), &child.branch_name)?;
+        let old_upstream_oid = match old_upstream_oid_override {
+            Some(old_upstream_oid_override) => old_upstream_oid_override.to_string(),
+            None => git::merge_base(new_parent_base.rebase_ref(), &child.branch_name)?,
+        };
         let old_head_oid = git::ref_oid(&child.branch_name)?;
         actions.push(RestackAction {
             node_id: child_id,
@@ -397,7 +437,7 @@ fn load_active_branch_node(
 mod tests {
     use super::{
         RestackAction, RestackBaseTarget, plan_after_branch_advance, plan_after_branch_reparent,
-        previews_for_actions,
+        plan_after_deleted_branch_with_old_upstream_override, previews_for_actions,
     };
     use crate::core::git;
     use crate::core::store::types::DIG_STATE_VERSION;
@@ -530,6 +570,64 @@ mod tests {
             );
             assert_eq!(planned[1].new_base.branch_name, "feat/auth-api");
             assert_eq!(planned[1].new_parent, None);
+        });
+    }
+
+    #[test]
+    fn uses_deleted_branch_head_override_when_promoting_child() {
+        with_temp_repo("dig-restack", |repo| {
+            initialize_main_repo(repo);
+            git_ok(repo, &["checkout", "-b", "feat/auth"]);
+            commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+            let deleted_branch_head_oid = git::ref_oid("feat/auth").unwrap();
+            git_ok(repo, &["checkout", "-b", "feat/auth-ui"]);
+            commit_file(repo, "ui.txt", "ui\n", "feat: ui");
+
+            let parent_id = Uuid::new_v4();
+            let child_id = Uuid::new_v4();
+            let state = crate::core::store::types::DigState {
+                version: DIG_STATE_VERSION,
+                nodes: vec![
+                    BranchNode {
+                        id: parent_id,
+                        branch_name: "feat/auth".into(),
+                        parent: ParentRef::Trunk,
+                        base_ref: "main".into(),
+                        fork_point_oid: "root".into(),
+                        head_oid_at_creation: "root".into(),
+                        created_at_unix_secs: 1,
+                        pull_request: None,
+                        archived: false,
+                    },
+                    BranchNode {
+                        id: child_id,
+                        branch_name: "feat/auth-ui".into(),
+                        parent: ParentRef::Branch { node_id: parent_id },
+                        base_ref: "feat/auth".into(),
+                        fork_point_oid: deleted_branch_head_oid.clone(),
+                        head_oid_at_creation: deleted_branch_head_oid.clone(),
+                        created_at_unix_secs: 2,
+                        pull_request: None,
+                        archived: false,
+                    },
+                ],
+            };
+
+            let planned = plan_after_deleted_branch_with_old_upstream_override(
+                &state,
+                parent_id,
+                "feat/auth",
+                &RestackBaseTarget::local("main"),
+                &ParentRef::Trunk,
+                &deleted_branch_head_oid,
+            )
+            .unwrap();
+
+            assert_eq!(planned.len(), 1);
+            assert_eq!(planned[0].branch_name, "feat/auth-ui");
+            assert_eq!(planned[0].old_upstream_branch_name, "feat/auth");
+            assert_eq!(planned[0].old_upstream_oid, deleted_branch_head_oid);
+            assert_eq!(planned[0].new_base.branch_name, "main");
         });
     }
 
