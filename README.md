@@ -1,5 +1,11 @@
 # dig
 
+[![CI Status](https://github.com/oneirosoft/dig/actions/workflows/ci.yml/badge.svg)](https://github.com/oneirosoft/dig/actions)
+[![Latest Release](https://img.shields.io/github/v/release/oneirosoft/dig)](https://github.com/oneirosoft/dig/releases)
+[![License: GPL-3.0](https://img.shields.io/github/license/oneirosoft/dig)](https://github.com/oneirosoft/dig/blob/main/LICENSE)
+[![Total Downloads](https://img.shields.io/github/downloads/oneirosoft/dig/total)](https://github.com/oneirosoft/dig/releases)
+[![Rust Version](https://img.shields.io/badge/rust-1.85%2B-orange)](https://www.rust-lang.org/)
+
 `dig` is a Git wrapper for stacked PR workflows. It helps you build feature branches on top of other feature branches, keep those parent/child relationships explicit, and see the stack as a tree instead of managing it by memory or convention.
 
 The goal is to make stacked changes easier to review and merge by reducing manual rebases, branch bookkeeping, and the cleanup work that usually follows when parent branches move.
@@ -101,7 +107,7 @@ dig pr --title "title" --body "body" --draft
 dig pr --view                   # open the current branch PR in the browser
 dig pr list                     # list open GitHub PRs that dig is tracking
 dig pr list --view              # list tracked PRs, then open them in the browser
-dig sync                        # reconcile local dig state, restack stale stacks, then offer cleanup
+dig sync                        # reconcile local stacks with Git and GitHub, restack, and update remotes
 dig sync --continue             # continue a paused restack after resolving conflicts
 dig merge <branch>              # merge a tracked branch into its tracked parent
 dig clean                       # stop tracking missing local branches and remove merged tracked branches
@@ -111,23 +117,25 @@ dig reparent <branch> -p <parent> # reparent a named tracked branch onto a new p
 dig orphan <branch>             # stop tracking a branch but keep the local branch
 ```
 
-### Sync local stacks
+### Sync stacks
 
-Run `dig sync` when local Git state and dig's tracked stack metadata may have drifted apart:
+Run `dig sync` to reconcile your local branches, dig's tracked stack metadata, and GitHub pull requests:
 
 ```bash
 dig sync
 ```
 
-Today `dig sync` is local-only. It will:
+`dig sync` is the primary command for keeping your entire workspace up to date. It will:
 
-1. Stop tracking branches that were deleted locally but are still tracked by dig.
-2. Restack tracked branches whose parent branch has moved ahead.
-3. Offer the same cleanup flow as `dig clean` for tracked branches that are now missing locally or already merged into their parent.
+1. **Fetch remotes:** Update local tracking branches from their remotes.
+2. **Reconcile state:** Identify branches that were deleted locally or merged on GitHub.
+3. **Repair PRs:** Reopen and retarget child pull requests if their parent branch was merged and deleted.
+4. **Restack:** Automatically restack tracked branches whose parent branch has moved ahead.
+5. **Update GitHub:** Retarget open pull requests if their base branch changed during restacking.
+6. **Push updates:** Prompt to push or force-push restacked branches to their remotes.
+7. **Cleanup:** Offer to delete tracked branches that are already merged or missing locally.
 
-If cleanup finds merged branches, `dig sync` reuses the same delete prompt as `dig clean`. If you decline that prompt, sync still succeeds and leaves cleanup for later.
-
-Remote sync is intentionally out of scope for now. Future GitHub and `gh` integration can extend `dig sync`, but the current command only reconciles local branches and local dig state.
+If `dig` hits a rebase conflict during restacking, it pauses and provides guidance on how to resolve and continue.
 
 ### Track GitHub pull requests
 
