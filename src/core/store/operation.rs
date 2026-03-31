@@ -10,7 +10,11 @@ pub fn load_operation(paths: &DaggerPaths) -> io::Result<Option<PendingOperation
     }
 
     let bytes = fs::read(&paths.operation_file)?;
-    let operation = serde_json::from_slice(&bytes)
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+
+    let migrated = super::migrate::migrate_operation(value)?;
+    let operation: PendingOperationState = serde_json::from_value(migrated)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
 
     Ok(Some(operation))

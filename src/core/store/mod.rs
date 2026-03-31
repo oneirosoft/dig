@@ -2,6 +2,7 @@ pub(crate) mod bootstrap;
 pub(crate) mod config;
 pub(crate) mod events;
 pub(crate) mod fs;
+pub(crate) mod migrate;
 pub(crate) mod mutations;
 pub(crate) mod operation;
 pub(crate) mod session;

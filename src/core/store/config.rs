@@ -10,7 +10,11 @@ pub fn load_config(paths: &DaggerPaths) -> io::Result<Option<DaggerConfig>> {
     }
 
     let bytes = fs::read(&paths.config_file)?;
-    let config = serde_json::from_slice(&bytes)
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+
+    let migrated = super::migrate::migrate_config(value)?;
+    let config: DaggerConfig = serde_json::from_value(migrated)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
 
     Ok(Some(config))

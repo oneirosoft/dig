@@ -10,7 +10,11 @@ pub fn load_state(paths: &DaggerPaths) -> io::Result<DaggerState> {
     }
 
     let bytes = fs::read(&paths.state_file)?;
-    let state = serde_json::from_slice(&bytes)
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+
+    let migrated = super::migrate::migrate_state(value)?;
+    let state: DaggerState = serde_json::from_value(migrated)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
 
     Ok(state)
