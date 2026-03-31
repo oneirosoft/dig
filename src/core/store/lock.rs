@@ -12,6 +12,7 @@ impl StoreLock {
     /// Acquire an advisory lock by creating a lock file.
     /// Returns an error if another process holds the lock.
     pub fn acquire(dagger_root: &Path) -> io::Result<Self> {
+        fs::create_dir_all(dagger_root)?;
         let lock_path = dagger_root.join("lock");
 
         // Try to create the lock file exclusively.

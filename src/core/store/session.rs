@@ -18,6 +18,23 @@ pub struct StoreSession {
 }
 
 impl StoreSession {
+    /// Build a session from pre-loaded parts with an already-acquired lock.
+    pub fn from_lock(
+        repo: RepoContext,
+        paths: DaggerPaths,
+        config: DaggerConfig,
+        state: DaggerState,
+        lock: StoreLock,
+    ) -> Self {
+        Self {
+            repo,
+            paths,
+            config,
+            state,
+            _lock: lock,
+        }
+    }
+
     /// Build a session from pre-loaded parts, acquiring the lock.
     pub fn from_parts(
         repo: RepoContext,
@@ -26,13 +43,7 @@ impl StoreSession {
         state: DaggerState,
     ) -> io::Result<Self> {
         let lock = StoreLock::acquire(&paths.root)?;
-        Ok(Self {
-            repo,
-            paths,
-            config,
-            state,
-            _lock: lock,
-        })
+        Ok(Self::from_lock(repo, paths, config, state, lock))
     }
 }
 
@@ -55,10 +66,10 @@ pub fn open_initialized(missing_message: &str) -> io::Result<StoreSession> {
 pub fn open_or_initialize(trunk_branch: &str) -> io::Result<(StoreSession, StoreInitialization)> {
     let repo = git::resolve_repo_context()?;
     let paths = dagger_paths(&repo.git_dir);
+    let lock = StoreLock::acquire(&paths.root)?;
     let store_initialization = initialize_store(&paths, trunk_branch)?;
     let config =
         load_config(&paths)?.ok_or_else(|| io::Error::other("dagger config is missing"))?;
-    let lock = StoreLock::acquire(&paths.root)?;
     let state = load_state(&paths)?;
 
     Ok((
