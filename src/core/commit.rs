@@ -306,12 +306,7 @@ fn maybe_restack_after_commit_inner(
 
     let actions =
         restack::plan_after_branch_advance(&state, node.id, &node.branch_name, old_head_oid)?;
-    let mut session = StoreSession {
-        repo: context.repo.clone(),
-        paths: store_paths,
-        config,
-        state,
-    };
+    let mut session = StoreSession::from_parts(context.repo.clone(), store_paths, config, state)?;
     record_branch_divergence_state(&mut session, node.id, BranchDivergenceState::Diverged)?;
     let restack_outcome = match workflow::execute_resumable_restack_operation(
         &mut session,
