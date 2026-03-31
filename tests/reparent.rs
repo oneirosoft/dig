@@ -22,7 +22,7 @@ fn reparents_current_branch_to_trunk_and_records_event() {
         assert!(stdout.contains("Reparented 'feat/auth-ui' onto 'main'."));
         assert!(stdout.contains("Restacked:"));
         assert!(stdout.contains("- feat/auth-ui onto main"));
-        assert!(stdout.contains("main\n└── ✓ feat/auth-ui"));
+        assert!(stdout.contains("* main\n└── ✓ feat/auth-ui"));
         assert_eq!(
             git_stdout(repo, &["branch", "--show-current"]),
             "feat/auth-ui"
@@ -73,7 +73,7 @@ fn reparents_named_branch_to_tracked_parent_and_restores_original_branch() {
         assert!(stdout.contains("Restacked:"));
         assert!(stdout.contains("- feat/auth-api onto feat/platform"));
         assert!(stdout.contains("- feat/auth-api-tests onto feat/auth-api"));
-        assert!(stdout.contains("feat/platform\n    └── ✓ feat/auth-api"));
+        assert!(stdout.contains("✓ main\n└── * feat/platform\n    └── * feat/auth-api\n        └── * feat/auth-api-tests"));
         assert_eq!(git_stdout(repo, &["branch", "--show-current"]), "main");
         assert_eq!(
             git_stdout(repo, &["merge-base", "feat/platform", "feat/auth-api"]),
@@ -97,6 +97,42 @@ fn reparents_named_branch_to_tracked_parent_and_restores_original_branch() {
         assert_eq!(tests["base_ref"], "feat/auth-api");
         assert_eq!(tests["parent"]["kind"], "branch");
         assert_eq!(tests["parent"]["node_id"], api["id"]);
+    });
+}
+
+#[test]
+fn reparents_named_branch_and_shows_unrelated_checked_out_branch_below_tree() {
+    with_temp_repo("dgr-reparent-cli", |repo| {
+        initialize_main_repo(repo);
+        dgr_ok(repo, &["init"]);
+        dgr_ok(repo, &["branch", "feat/auth"]);
+        commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+        dgr_ok(repo, &["branch", "feat/auth-api"]);
+        commit_file(repo, "api.txt", "api\n", "feat: api");
+        dgr_ok(repo, &["branch", "feat/auth-api-tests"]);
+        commit_file(repo, "tests.txt", "tests\n", "feat: tests");
+        git_ok(repo, &["checkout", "main"]);
+        dgr_ok(repo, &["branch", "feat/platform"]);
+        commit_file(repo, "platform.txt", "platform\n", "feat: platform");
+        git_ok(repo, &["checkout", "main"]);
+        dgr_ok(repo, &["branch", "feat/billing"]);
+        commit_file(repo, "billing.txt", "billing\n", "feat: billing");
+        git_ok(repo, &["checkout", "feat/billing"]);
+
+        let output = dgr_ok(repo, &["reparent", "feat/auth-api", "-p", "feat/platform"]);
+        let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
+
+        assert!(stdout.contains("Reparented 'feat/auth-api' onto 'feat/platform'."));
+        assert!(stdout.contains("Returned to 'feat/billing' after reparenting."));
+        assert!(stdout.contains("- feat/auth-api onto feat/platform"));
+        assert!(stdout.contains("- feat/auth-api-tests onto feat/auth-api"));
+        assert!(stdout.contains(
+            "* main\n└── * feat/platform\n    └── * feat/auth-api\n        └── * feat/auth-api-tests\n\n✓ feat/billing"
+        ));
+        assert_eq!(
+            git_stdout(repo, &["branch", "--show-current"]),
+            "feat/billing"
+        );
     });
 }
 

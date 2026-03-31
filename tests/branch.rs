@@ -26,7 +26,7 @@ fn branch_command_renders_marked_lineage_and_tracks_parent() {
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
 
         assert!(stdout.contains("Created and switched to 'feat/auth'."));
-        assert!(stdout.contains("✓ feat/auth\n│ \n*  main"));
+        assert!(stdout.contains("✓ feat/auth\n│ \n* main"));
 
         let state = load_state_json(repo);
         let node = find_node(&state, "feat/auth").unwrap();
@@ -47,7 +47,7 @@ fn init_reuses_marked_lineage_output_for_current_branch() {
 
         assert!(stdout.contains("Using existing Git repository."));
         assert!(stdout.contains("Dagger is already initialized."));
-        assert!(stdout.contains("✓ feat/auth\n│ \n*  main"));
+        assert!(stdout.contains("✓ feat/auth\n│ \n* main"));
     });
 }
 
@@ -80,6 +80,6 @@ exit 1
         let output = dgr_ok(repo, &["init"]);
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
 
-        assert!(stdout.contains("✓ feat/auth (#123)\n│ \n*  main"));
+        assert!(stdout.contains("✓ feat/auth (#123)\n│ \n* main"));
     });
 }

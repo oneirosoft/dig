@@ -19,12 +19,30 @@ pub fn render_branch_lineage(lineage: &[BranchLineageNode]) -> String {
 }
 
 pub fn render_stack_tree(view: &TreeView) -> String {
-    common::render_tree(
+    let mut rendered = common::render_tree(
         view.root_label.as_ref().map(format_tree_label),
         &view.roots,
         &|node| format_branch_label(&node.branch_name, node.is_current, node.pull_request_number),
         &|node| node.children.as_slice(),
-    )
+    );
+
+    if !view.is_current_visible {
+        if let Some(current_branch) = &view.current_branch_name {
+            let label = match &view.current_branch_suffix {
+                Some(suffix) => format!("{current_branch} {suffix}"),
+                None => current_branch.clone(),
+            };
+
+            rendered.push_str("\n\n");
+            rendered.push_str(&format!(
+                "{} {}",
+                Accent::BranchRef.paint_ansi(markers::CURRENT_BRANCH),
+                Accent::BranchRef.paint_ansi(&label)
+            ));
+        }
+    }
+
+    rendered
 }
 
 fn format_tree_label(root_label: &TreeLabel) -> String {
@@ -56,7 +74,7 @@ fn format_branch_label(
             Accent::BranchRef.paint_ansi(&label)
         )
     } else {
-        label
+        format!("{} {}", markers::NON_CURRENT_BRANCH, label)
     }
 }
 
@@ -70,7 +88,7 @@ fn format_lineage_branch(branch: &BranchLineageNode, is_current: bool) -> String
             Accent::BranchRef.paint_ansi(&label)
         )
     } else {
-        format!("{}  {}", markers::NON_CURRENT_BRANCH, label)
+        format!("{} {}", markers::NON_CURRENT_BRANCH, label)
     }
 }
 
@@ -102,9 +120,9 @@ mod tests {
             concat!(
                 "\u{1b}[32m✓\u{1b}[0m \u{1b}[32mfeature/api-followup\u{1b}[0m\n",
                 "│ \n",
-                "*  feature/api\n",
+                "* feature/api\n",
                 "│ \n",
-                "*  main"
+                "* main"
             )
         );
     }
@@ -141,9 +159,9 @@ mod tests {
             concat!(
                 "\u{1b}[32m✓\u{1b}[0m \u{1b}[32mfeature/api-followup (#43)\u{1b}[0m\n",
                 "│ \n",
-                "*  feature/api (#42)\n",
+                "* feature/api (#42)\n",
                 "│ \n",
-                "*  main"
+                "* main"
             )
         );
     }
@@ -199,19 +217,22 @@ mod tests {
                     children: vec![],
                 },
             ],
+            current_branch_name: Some("feat/auth-ui".into()),
+            is_current_visible: true,
+            current_branch_suffix: None,
         });
 
         assert_eq!(
             rendered,
             concat!(
-                "main\n",
-                "├── feat/auth\n",
-                "│   ├── feat/auth-api\n",
-                "│   │   └── feat/auth-api-tests\n",
+                "* main\n",
+                "├── * feat/auth\n",
+                "│   ├── * feat/auth-api\n",
+                "│   │   └── * feat/auth-api-tests\n",
                 "│   └── \u{1b}[32m✓\u{1b}[0m \u{1b}[32mfeat/auth-ui\u{1b}[0m\n",
-                "├── feat/billing\n",
-                "│   └── feat/billing-retry\n",
-                "└── docs/readme"
+                "├── * feat/billing\n",
+                "│   └── * feat/billing-retry\n",
+                "└── * docs/readme"
             )
         );
     }
@@ -243,14 +264,17 @@ mod tests {
                     children: vec![],
                 },
             ],
+            current_branch_name: Some("feat/auth-ui".into()),
+            is_current_visible: true,
+            current_branch_suffix: None,
         });
 
         assert_eq!(
             rendered,
             concat!(
-                "feat/auth\n",
-                "├── feat/auth-api\n",
-                "│   └── feat/auth-api-tests\n",
+                "* feat/auth\n",
+                "├── * feat/auth-api\n",
+                "│   └── * feat/auth-api-tests\n",
                 "└── \u{1b}[32m✓\u{1b}[0m \u{1b}[32mfeat/auth-ui\u{1b}[0m"
             )
         );
@@ -278,14 +302,69 @@ mod tests {
                     children: vec![],
                 },
             ],
+            current_branch_name: Some("feat/auth-ui".into()),
+            is_current_visible: true,
+            current_branch_suffix: None,
         });
 
         assert_eq!(
             rendered,
             concat!(
-                "feat/auth (#42)\n",
-                "├── feat/auth-api (#43)\n",
+                "* feat/auth (#42)\n",
+                "├── * feat/auth-api (#43)\n",
                 "└── \u{1b}[32m✓\u{1b}[0m \u{1b}[32mfeat/auth-ui (#44)\u{1b}[0m"
+            )
+        );
+    }
+
+    #[test]
+    fn renders_hidden_tracked_current_branch_at_bottom() {
+        let rendered = render_stack_tree(&TreeView {
+            root_label: Some(TreeLabel {
+                branch_name: "feat/billing".into(),
+                is_current: false,
+                pull_request_number: None,
+            }),
+            roots: vec![],
+            current_branch_name: Some("feat/auth-ui".into()),
+            is_current_visible: false,
+            current_branch_suffix: None,
+        });
+
+        assert_eq!(
+            rendered,
+            concat!(
+                "* feat/billing\n\n",
+                "\u{1b}[32m✓\u{1b}[0m \u{1b}[32mfeat/auth-ui\u{1b}[0m"
+            )
+        );
+    }
+
+    #[test]
+    fn renders_hidden_orphaned_current_branch_at_bottom() {
+        let rendered = render_stack_tree(&TreeView {
+            root_label: Some(TreeLabel {
+                branch_name: "main".into(),
+                is_current: false,
+                pull_request_number: None,
+            }),
+            roots: vec![TreeNode {
+                branch_name: "feat/tracked".into(),
+                is_current: false,
+                pull_request_number: None,
+                children: vec![],
+            }],
+            current_branch_name: Some("feat/untracked".into()),
+            is_current_visible: false,
+            current_branch_suffix: Some("(orphaned)".into()),
+        });
+
+        assert_eq!(
+            rendered,
+            concat!(
+                "* main\n",
+                "└── * feat/tracked\n\n",
+                "\u{1b}[32m✓\u{1b}[0m \u{1b}[32mfeat/untracked (orphaned)\u{1b}[0m"
             )
         );
     }
