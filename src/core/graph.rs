@@ -151,9 +151,14 @@ impl<'a> BranchGraph<'a> {
         visited: &mut HashSet<Uuid>,
     ) -> io::Result<BranchTreeNode> {
         if !visited.insert(node_id) {
+            let branch_info = self
+                .state
+                .find_branch_by_id(node_id)
+                .map(|n| format!(" (branch: {})", n.branch_name))
+                .unwrap_or_default();
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "cycle detected in branch tree",
+                format!("cycle detected in branch tree at node {}{}", node_id, branch_info),
             ));
         }
 
@@ -353,9 +358,10 @@ mod tests {
 
         let result = graph.lineage("branch-a", "main");
 
-        // Should contain branch-a and branch-b but not loop forever
-        assert!(result.len() <= 2);
+        // Should contain branch-a and branch-b exactly once, cycle broken
+        assert_eq!(result.len(), 2);
         assert_eq!(result[0].branch_name, "branch-a");
+        assert_eq!(result[1].branch_name, "branch-b");
     }
 
     #[test]
@@ -363,9 +369,9 @@ mod tests {
         let (state, id_a, _) = fixture_cycle_state();
         let graph = BranchGraph::new(&state);
 
-        // Should not hang; exact depth value is not critical, just that it terminates
         let depth = graph.branch_depth(id_a);
-        assert!(depth <= 2);
+        // A -> B -> cycle detected, depth should be 1
+        assert_eq!(depth, 1);
     }
 
     #[test]
@@ -412,6 +418,20 @@ mod tests {
         // A is a child of C and C is a child of A — this creates a cycle in
         // descendant traversal. It must terminate.
         let descendants = graph.active_descendant_ids(id_a);
-        assert!(descendants.len() <= 2);
+        // Should contain id_c exactly once (it's a "child" of id_a since id_c's parent is id_a)
+        assert_eq!(descendants.len(), 1);
+        assert_eq!(descendants[0], id_c);
+    }
+
+    #[test]
+    fn subtree_returns_error_on_cycle() {
+        let (state, id_a, _) = fixture_cycle_state();
+        let graph = BranchGraph::new(&state);
+
+        let result = graph.subtree(id_a);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("cycle detected"));
     }
 }
