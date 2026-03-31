@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io;
 
 use uuid::Uuid;
@@ -35,6 +36,8 @@ impl<'a> BranchGraph<'a> {
             }];
         };
 
+        let mut visited = HashSet::new();
+        visited.insert(current_node.id);
         let mut lineage = vec![BranchLineageNode {
             branch_name: current_node.branch_name.clone(),
             pull_request_number: current_node.pull_request.as_ref().map(|pr| pr.number),
@@ -52,6 +55,9 @@ impl<'a> BranchGraph<'a> {
                     break;
                 }
                 ParentRef::Branch { node_id } => {
+                    if !visited.insert(*node_id) {
+                        break; // cycle detected
+                    }
                     let Some(parent_node) = self.state.find_branch_by_id(*node_id) else {
                         break;
                     };
@@ -82,9 +88,14 @@ impl<'a> BranchGraph<'a> {
 
     pub fn active_descendant_ids(&self, node_id: Uuid) -> Vec<Uuid> {
         let mut descendants = Vec::new();
+        let mut visited = HashSet::new();
+        visited.insert(node_id);
         let mut frontier = self.active_children_ids(node_id);
 
         while let Some(child_id) = frontier.pop() {
+            if !visited.insert(child_id) {
+                continue; // cycle detected
+            }
             descendants.push(child_id);
             frontier.extend(self.active_children_ids(child_id));
         }
@@ -97,12 +108,17 @@ impl<'a> BranchGraph<'a> {
             return 0;
         };
 
+        let mut visited = HashSet::new();
+        visited.insert(node_id);
         let mut depth = 0;
 
         loop {
             match current_node.parent {
                 ParentRef::Trunk => return depth,
                 ParentRef::Branch { node_id: parent_id } => {
+                    if !visited.insert(parent_id) {
+                        return depth; // cycle detected
+                    }
                     let Some(parent_node) = self.state.find_branch_by_id(parent_id) else {
                         return depth;
                     };
@@ -125,13 +141,29 @@ impl<'a> BranchGraph<'a> {
     }
 
     pub fn subtree(&self, node_id: Uuid) -> io::Result<BranchTreeNode> {
+        let mut visited = HashSet::new();
+        self.subtree_inner(node_id, &mut visited)
+    }
+
+    fn subtree_inner(
+        &self,
+        node_id: Uuid,
+        visited: &mut HashSet<Uuid>,
+    ) -> io::Result<BranchTreeNode> {
+        if !visited.insert(node_id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "cycle detected in branch tree",
+            ));
+        }
+
         let node = self.state.find_branch_by_id(node_id).ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "tracked branch was not found")
         })?;
 
         let mut children = Vec::new();
         for child_id in self.active_children_ids(node_id) {
-            children.push(self.subtree(child_id)?);
+            children.push(self.subtree_inner(child_id, visited)?);
         }
 
         Ok(BranchTreeNode {
@@ -272,5 +304,114 @@ mod tests {
                 }],
             }
         );
+    }
+
+    /// Helper to build a cyclic state where A's parent is B and B's parent is A.
+    fn fixture_cycle_state() -> (DaggerState, Uuid, Uuid) {
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+
+        (
+            DaggerState {
+                version: DAGGER_STATE_VERSION,
+                nodes: vec![
+                    BranchNode {
+                        id: id_a,
+                        branch_name: "branch-a".into(),
+                        parent: ParentRef::Branch { node_id: id_b },
+                        base_ref: "branch-b".into(),
+                        fork_point_oid: "aaa".into(),
+                        head_oid_at_creation: "aaa".into(),
+                        created_at_unix_secs: 1,
+                        divergence_state: BranchDivergenceState::Unknown,
+                        pull_request: None,
+                        archived: false,
+                    },
+                    BranchNode {
+                        id: id_b,
+                        branch_name: "branch-b".into(),
+                        parent: ParentRef::Branch { node_id: id_a },
+                        base_ref: "branch-a".into(),
+                        fork_point_oid: "bbb".into(),
+                        head_oid_at_creation: "bbb".into(),
+                        created_at_unix_secs: 2,
+                        divergence_state: BranchDivergenceState::Unknown,
+                        pull_request: None,
+                        archived: false,
+                    },
+                ],
+            },
+            id_a,
+            id_b,
+        )
+    }
+
+    #[test]
+    fn lineage_terminates_on_cycle() {
+        let (state, _, _) = fixture_cycle_state();
+        let graph = BranchGraph::new(&state);
+
+        let result = graph.lineage("branch-a", "main");
+
+        // Should contain branch-a and branch-b but not loop forever
+        assert!(result.len() <= 2);
+        assert_eq!(result[0].branch_name, "branch-a");
+    }
+
+    #[test]
+    fn branch_depth_terminates_on_cycle() {
+        let (state, id_a, _) = fixture_cycle_state();
+        let graph = BranchGraph::new(&state);
+
+        // Should not hang; exact depth value is not critical, just that it terminates
+        let depth = graph.branch_depth(id_a);
+        assert!(depth <= 2);
+    }
+
+    #[test]
+    fn active_descendant_ids_terminates_on_cycle() {
+        // Create a state where a node appears as its own descendant via a
+        // circular child reference. We simulate this by making node C point
+        // to node A as parent while A points to C as parent, forming a cycle
+        // in the child-walk direction.
+        let id_a = Uuid::new_v4();
+        let id_c = Uuid::new_v4();
+
+        let state = DaggerState {
+            version: DAGGER_STATE_VERSION,
+            nodes: vec![
+                BranchNode {
+                    id: id_a,
+                    branch_name: "cycle-a".into(),
+                    parent: ParentRef::Branch { node_id: id_c },
+                    base_ref: "cycle-c".into(),
+                    fork_point_oid: "aaa".into(),
+                    head_oid_at_creation: "aaa".into(),
+                    created_at_unix_secs: 1,
+                    divergence_state: BranchDivergenceState::Unknown,
+                    pull_request: None,
+                    archived: false,
+                },
+                BranchNode {
+                    id: id_c,
+                    branch_name: "cycle-c".into(),
+                    parent: ParentRef::Branch { node_id: id_a },
+                    base_ref: "cycle-a".into(),
+                    fork_point_oid: "ccc".into(),
+                    head_oid_at_creation: "ccc".into(),
+                    created_at_unix_secs: 2,
+                    divergence_state: BranchDivergenceState::Unknown,
+                    pull_request: None,
+                    archived: false,
+                },
+            ],
+        };
+
+        let graph = BranchGraph::new(&state);
+
+        // A is a child of C and C is a child of A — this creates a cycle in
+        // descendant traversal. It must terminate.
+        let descendants = graph.active_descendant_ids(id_a);
+        assert!(descendants.len() <= 2);
     }
 }
