@@ -3,7 +3,6 @@ use std::io;
 use clap::Args;
 
 use crate::core::reparent::{self, ReparentOptions, ReparentOutcome, ReparentPlan};
-use crate::core::tree;
 
 use super::CommandOutcome;
 use super::common;
@@ -23,8 +22,7 @@ pub fn execute(args: ReparentArgs) -> io::Result<CommandOutcome> {
     let outcome = reparent::apply(&plan)?;
 
     if outcome.status.success() {
-        let view = tree::focused_context_view(&outcome.branch_name)?;
-        let rendered_tree = super::tree::render_stack_tree(&view);
+        let rendered_tree = super::tree::render_focused_context_tree(&outcome.branch_name, None)?;
         let output = format_reparent_success_output(&outcome, &rendered_tree);
         if !output.is_empty() {
             println!("{output}");

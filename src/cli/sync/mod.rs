@@ -51,8 +51,8 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
                 }
             }
             SyncCompletion::Adopt(adopt_outcome) if adopt_outcome.status.success() => {
-                let view = tree::focused_context_view(&adopt_outcome.branch_name)?;
-                let rendered_tree = super::tree::render_stack_tree(&view);
+                let rendered_tree =
+                    super::tree::render_focused_context_tree(&adopt_outcome.branch_name, None)?;
                 let output =
                     super::adopt::format_adopt_success_output(adopt_outcome, &rendered_tree);
                 if !output.is_empty() {
@@ -102,8 +102,10 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
                 }
             }
             SyncCompletion::Orphan(orphan_outcome) if orphan_outcome.status.success() => {
-                let view = tree::focused_context_view(&orphan_outcome.parent_branch_name)?;
-                let rendered_tree = super::tree::render_stack_tree(&view);
+                let rendered_tree = super::tree::render_focused_context_tree(
+                    &orphan_outcome.parent_branch_name,
+                    Some((&orphan_outcome.branch_name, "(orphaned)")),
+                )?;
                 let output =
                     super::orphan::format_orphan_success_output(orphan_outcome, &rendered_tree);
                 if !output.is_empty() {
@@ -111,8 +113,8 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
                 }
             }
             SyncCompletion::Reparent(reparent_outcome) if reparent_outcome.status.success() => {
-                let view = tree::focused_context_view(&reparent_outcome.branch_name)?;
-                let rendered_tree = super::tree::render_stack_tree(&view);
+                let rendered_tree =
+                    super::tree::render_focused_context_tree(&reparent_outcome.branch_name, None)?;
                 let output = super::reparent::format_reparent_success_output(
                     reparent_outcome,
                     &rendered_tree,

@@ -1,9 +1,9 @@
 mod support;
 
 use support::{
-    commit_file, dgr, dgr_ok, find_archived_node, find_node, git_ok,
-    git_stdout, initialize_main_repo, load_operation_json, load_state_json,
-    overwrite_file, strip_ansi, with_temp_repo,
+    commit_file, dgr, dgr_ok, find_archived_node, find_node, git_ok, git_stdout,
+    initialize_main_repo, load_operation_json, load_state_json, overwrite_file, strip_ansi,
+    with_temp_repo, write_file,
 };
 
 #[test]
@@ -98,7 +98,10 @@ fn orphans_named_branch_restacks_descendants_to_tracked_parent() {
         assert!(find_node(&state, "feat/auth-api").is_none());
         let child = find_node(&state, "feat/auth-api-tests").unwrap();
         assert_eq!(child["base_ref"], "feat/auth");
-        assert_eq!(child["parent"]["node_id"], find_node(&state, "feat/auth").unwrap()["id"]);
+        assert_eq!(
+            child["parent"]["node_id"],
+            find_node(&state, "feat/auth").unwrap()["id"]
+        );
         assert!(find_archived_node(&state, "feat/auth-api").is_some());
         assert!(load_operation_json(repo).is_none());
     });
@@ -131,6 +134,45 @@ fn sync_continues_paused_orphan_operation() {
         assert!(stdout.contains("Orphaned 'feat/auth'. It is no longer tracked by dagger."));
         assert!(stdout.contains("Returned to 'main' after orphaning."));
         assert!(stdout.contains("- feat/auth-ui onto main"));
+
+        let state = load_state_json(repo);
+        assert!(find_node(&state, "feat/auth").is_none());
+        let child = find_node(&state, "feat/auth-ui").unwrap();
+        assert_eq!(child["base_ref"], "main");
+        assert_eq!(child["parent"]["kind"], "trunk");
+        assert!(find_archived_node(&state, "feat/auth").is_some());
+        assert!(load_operation_json(repo).is_none());
+    });
+}
+
+#[test]
+fn sync_continues_paused_orphan_and_shows_orphaned_current_branch_below_tree() {
+    with_temp_repo("dgr-orphan-cli", |repo| {
+        initialize_main_repo(repo);
+        dgr_ok(repo, &["init"]);
+        dgr_ok(repo, &["branch", "feat/auth"]);
+        overwrite_file(repo, "shared.txt", "parent\n", "feat: auth");
+        dgr_ok(repo, &["branch", "feat/auth-ui"]);
+        overwrite_file(repo, "shared.txt", "child\n", "feat: auth ui");
+        git_ok(repo, &["checkout", "main"]);
+        overwrite_file(repo, "shared.txt", "main\n", "feat: trunk");
+        git_ok(repo, &["checkout", "feat/auth"]);
+
+        let output = dgr(repo, &["orphan"]);
+        assert!(!output.status.success());
+        assert!(load_operation_json(repo).is_some());
+
+        write_file(repo, "shared.txt", "resolved\n");
+        git_ok(repo, &["add", "shared.txt"]);
+
+        let output = dgr_ok(repo, &["sync", "--continue"]);
+        let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
+
+        assert!(stdout.contains("Orphaned 'feat/auth'. It is no longer tracked by dagger."));
+        assert!(stdout.contains("Returned to 'feat/auth' after orphaning."));
+        assert!(stdout.contains("- feat/auth-ui onto main"));
+        assert!(stdout.contains("* main\n└── * feat/auth-ui\n\n✓ feat/auth (orphaned)"));
+        assert_eq!(git_stdout(repo, &["branch", "--show-current"]), "feat/auth");
 
         let state = load_state_json(repo);
         assert!(find_node(&state, "feat/auth").is_none());

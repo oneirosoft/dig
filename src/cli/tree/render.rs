@@ -26,7 +26,7 @@ pub fn render_stack_tree(view: &TreeView) -> String {
         &|node| node.children.as_slice(),
     );
 
-    if !view.is_current_in_tree {
+    if !view.is_current_visible {
         if let Some(current_branch) = &view.current_branch_name {
             let label = match &view.current_branch_suffix {
                 Some(suffix) => format!("{current_branch} {suffix}"),
@@ -218,7 +218,7 @@ mod tests {
                 },
             ],
             current_branch_name: Some("feat/auth-ui".into()),
-            is_current_in_tree: true,
+            is_current_visible: true,
             current_branch_suffix: None,
         });
 
@@ -265,7 +265,7 @@ mod tests {
                 },
             ],
             current_branch_name: Some("feat/auth-ui".into()),
-            is_current_in_tree: true,
+            is_current_visible: true,
             current_branch_suffix: None,
         });
 
@@ -303,7 +303,7 @@ mod tests {
                 },
             ],
             current_branch_name: Some("feat/auth-ui".into()),
-            is_current_in_tree: true,
+            is_current_visible: true,
             current_branch_suffix: None,
         });
 
@@ -318,7 +318,30 @@ mod tests {
     }
 
     #[test]
-    fn renders_untracked_current_branch_at_bottom() {
+    fn renders_hidden_tracked_current_branch_at_bottom() {
+        let rendered = render_stack_tree(&TreeView {
+            root_label: Some(TreeLabel {
+                branch_name: "feat/billing".into(),
+                is_current: false,
+                pull_request_number: None,
+            }),
+            roots: vec![],
+            current_branch_name: Some("feat/auth-ui".into()),
+            is_current_visible: false,
+            current_branch_suffix: None,
+        });
+
+        assert_eq!(
+            rendered,
+            concat!(
+                "* feat/billing\n\n",
+                "\u{1b}[32m✓\u{1b}[0m \u{1b}[32mfeat/auth-ui\u{1b}[0m"
+            )
+        );
+    }
+
+    #[test]
+    fn renders_hidden_orphaned_current_branch_at_bottom() {
         let rendered = render_stack_tree(&TreeView {
             root_label: Some(TreeLabel {
                 branch_name: "main".into(),
@@ -332,7 +355,7 @@ mod tests {
                 children: vec![],
             }],
             current_branch_name: Some("feat/untracked".into()),
-            is_current_in_tree: false,
+            is_current_visible: false,
             current_branch_suffix: Some("(orphaned)".into()),
         });
 

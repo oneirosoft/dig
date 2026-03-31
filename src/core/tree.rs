@@ -33,7 +33,7 @@ pub struct TreeView {
     pub root_label: Option<TreeLabel>,
     pub roots: Vec<TreeNode>,
     pub current_branch_name: Option<String>,
-    pub is_current_in_tree: bool,
+    pub is_current_visible: bool,
     pub current_branch_suffix: Option<String>,
 }
 
@@ -112,24 +112,34 @@ fn build_tree_view(
         .map(|node| build_tree_node(node, current_branch, &child_lookup))
         .collect();
 
-    let is_current_trunk = current_branch == Some(trunk_branch);
-    let is_current_in_tree = is_current_trunk || roots.iter().any(|root| is_current_in_node(root));
-
-    TreeView {
+    with_current_visibility(TreeView {
         root_label: Some(TreeLabel {
             branch_name: trunk_branch.to_string(),
-            is_current: is_current_trunk,
+            is_current: current_branch == Some(trunk_branch),
             pull_request_number: None,
         }),
         roots,
         current_branch_name: current_branch.map(String::from),
-        is_current_in_tree,
+        is_current_visible: false,
         current_branch_suffix: None,
-    }
+    })
 }
 
-fn is_current_in_node(node: &TreeNode) -> bool {
-    node.is_current || node.children.iter().any(is_current_in_node)
+fn is_current_visible_in_node(node: &TreeNode) -> bool {
+    node.is_current || node.children.iter().any(is_current_visible_in_node)
+}
+
+fn is_current_visible(view: &TreeView) -> bool {
+    view.root_label
+        .as_ref()
+        .map(|label| label.is_current)
+        .unwrap_or(false)
+        || view.roots.iter().any(is_current_visible_in_node)
+}
+
+fn with_current_visibility(mut view: TreeView) -> TreeView {
+    view.is_current_visible = is_current_visible(&view);
+    view
 }
 
 fn filter_tree_view(mut view: TreeView, requested_branch: Option<&str>) -> io::Result<TreeView> {
@@ -146,7 +156,7 @@ fn filter_tree_view(mut view: TreeView, requested_branch: Option<&str>) -> io::R
 
     if requested_branch == root_label.branch_name {
         view.root_label = None;
-        return Ok(view);
+        return Ok(with_current_visibility(view));
     }
 
     let selected_node = view
@@ -170,7 +180,7 @@ fn filter_tree_view(mut view: TreeView, requested_branch: Option<&str>) -> io::R
     });
     view.roots = selected_node.children.clone();
 
-    Ok(view)
+    Ok(with_current_visibility(view))
 }
 
 fn focus_tree_view(view: TreeView, requested_branch: &str) -> io::Result<TreeView> {
@@ -204,13 +214,13 @@ fn focus_tree_view(view: TreeView, requested_branch: &str) -> io::Result<TreeVie
             )
         })?;
 
-    Ok(TreeView {
+    Ok(with_current_visibility(TreeView {
         root_label: view.root_label,
         roots: vec![focused_root],
         current_branch_name: view.current_branch_name,
-        is_current_in_tree: view.is_current_in_tree,
+        is_current_visible: false,
         current_branch_suffix: view.current_branch_suffix,
-    })
+    }))
 }
 
 fn build_tree_node(
@@ -355,7 +365,7 @@ mod tests {
                     },
                 ],
                 current_branch_name: Some("feat/auth-api".into()),
-                is_current_in_tree: true,
+                is_current_visible: true,
                 current_branch_suffix: None,
             }
         );
@@ -394,7 +404,7 @@ mod tests {
                 ],
             }],
             current_branch_name: Some("feat/auth-ui".into()),
-            is_current_in_tree: true,
+            is_current_visible: true,
             current_branch_suffix: None,
         };
 
@@ -426,7 +436,86 @@ mod tests {
                     },
                 ],
                 current_branch_name: Some("feat/auth-ui".into()),
-                is_current_in_tree: true,
+                is_current_visible: true,
+                current_branch_suffix: None,
+            }
+        );
+    }
+
+    #[test]
+    fn filtering_tree_marks_current_branch_hidden_when_outside_selected_subtree() {
+        let view = TreeView {
+            root_label: Some(TreeLabel {
+                branch_name: "main".into(),
+                is_current: false,
+                pull_request_number: None,
+            }),
+            roots: vec![
+                TreeNode {
+                    branch_name: "feat/auth".into(),
+                    is_current: false,
+                    pull_request_number: Some(101),
+                    children: vec![],
+                },
+                TreeNode {
+                    branch_name: "feat/billing".into(),
+                    is_current: true,
+                    pull_request_number: Some(102),
+                    children: vec![],
+                },
+            ],
+            current_branch_name: Some("feat/billing".into()),
+            is_current_visible: true,
+            current_branch_suffix: None,
+        };
+
+        assert_eq!(
+            filter_tree_view(view, Some("feat/auth")).unwrap(),
+            TreeView {
+                root_label: Some(TreeLabel {
+                    branch_name: "feat/auth".into(),
+                    is_current: false,
+                    pull_request_number: Some(101),
+                }),
+                roots: vec![],
+                current_branch_name: Some("feat/billing".into()),
+                is_current_visible: false,
+                current_branch_suffix: None,
+            }
+        );
+    }
+
+    #[test]
+    fn filtering_trunk_marks_current_branch_hidden_when_trunk_header_is_removed() {
+        let view = TreeView {
+            root_label: Some(TreeLabel {
+                branch_name: "main".into(),
+                is_current: true,
+                pull_request_number: None,
+            }),
+            roots: vec![TreeNode {
+                branch_name: "feat/auth".into(),
+                is_current: false,
+                pull_request_number: Some(101),
+                children: vec![],
+            }],
+            current_branch_name: Some("main".into()),
+            is_current_visible: true,
+            current_branch_suffix: None,
+        };
+
+        assert_eq!(
+            filter_tree_view(view, Some("main")).unwrap(),
+            TreeView {
+                root_label: None,
+                roots: vec![TreeNode {
+                    branch_name: "feat/auth".into(),
+                    is_current: false,
+                    pull_request_number: Some(101),
+                    children: vec![],
+                }],
+                current_branch_name: Some("main".into()),
+                is_current_visible: false,
                 current_branch_suffix: None,
             }
         );
@@ -473,7 +562,7 @@ mod tests {
                 },
             ],
             current_branch_name: Some("feat/auth-api".into()),
-            is_current_in_tree: true,
+            is_current_visible: true,
             current_branch_suffix: None,
         };
 
@@ -502,7 +591,65 @@ mod tests {
                     }],
                 }],
                 current_branch_name: Some("feat/auth-api".into()),
-                is_current_in_tree: true,
+                is_current_visible: true,
+                current_branch_suffix: None,
+            }
+        );
+    }
+
+    #[test]
+    fn focusing_tree_marks_current_branch_hidden_when_outside_selected_path() {
+        let view = TreeView {
+            root_label: Some(TreeLabel {
+                branch_name: "main".into(),
+                is_current: false,
+                pull_request_number: None,
+            }),
+            roots: vec![
+                TreeNode {
+                    branch_name: "feat/auth".into(),
+                    is_current: false,
+                    pull_request_number: Some(101),
+                    children: vec![TreeNode {
+                        branch_name: "feat/auth-api".into(),
+                        is_current: false,
+                        pull_request_number: Some(102),
+                        children: vec![],
+                    }],
+                },
+                TreeNode {
+                    branch_name: "feat/billing".into(),
+                    is_current: true,
+                    pull_request_number: Some(103),
+                    children: vec![],
+                },
+            ],
+            current_branch_name: Some("feat/billing".into()),
+            is_current_visible: true,
+            current_branch_suffix: None,
+        };
+
+        assert_eq!(
+            focus_tree_view(view, "feat/auth-api").unwrap(),
+            TreeView {
+                root_label: Some(TreeLabel {
+                    branch_name: "main".into(),
+                    is_current: false,
+                    pull_request_number: None,
+                }),
+                roots: vec![TreeNode {
+                    branch_name: "feat/auth".into(),
+                    is_current: false,
+                    pull_request_number: Some(101),
+                    children: vec![TreeNode {
+                        branch_name: "feat/auth-api".into(),
+                        is_current: false,
+                        pull_request_number: Some(102),
+                        children: vec![],
+                    }],
+                }],
+                current_branch_name: Some("feat/billing".into()),
+                is_current_visible: false,
                 current_branch_suffix: None,
             }
         );
