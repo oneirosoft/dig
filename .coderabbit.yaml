@@ -1,0 +1,28 @@
+language: en
+reviews:
+  profile: chill
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "src/core/store/**"
+      instructions: >
+        Pay close attention to atomicity, error handling on I/O operations,
+        and state consistency. These files manage persistent state that must
+        survive crashes.
+    - path: "src/core/git.rs"
+      instructions: >
+        Review for command injection risks in git subprocess invocations.
+        Ensure all user-provided branch names are passed as separate args,
+        never interpolated into shell strings.
+    - path: "src/cli/**"
+      instructions: >
+        Verify CLI layer is a thin adapter. Business logic should live in
+        src/core/. Check that error messages are user-friendly.
+  tools:
+    clippy:
+      enabled: true
+    shellcheck:
+      enabled: true
+chat:
+  auto_reply: true
