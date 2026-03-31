@@ -1,9 +1,14 @@
-language: en
+# CodeRabbit configuration
+# https://docs.coderabbit.ai/guides/configure-coderabbit
+language: en-US
 reviews:
-  profile: chill
   auto_review:
     enabled: true
     drafts: false
+    base_branches:
+      - main
+  path_filters:
+    - "!.claude/**"
   path_instructions:
     - path: "src/core/store/**"
       instructions: >
@@ -19,6 +24,18 @@ reviews:
       instructions: >
         Verify CLI layer is a thin adapter. Business logic should live in
         src/core/. Check that error messages are user-friendly.
+    - path: "**/*.rs"
+      instructions: >
+        Focus on Rust best practices, proper error handling, and security
+        considerations. Flag any potential issues with unsafe code or
+        subprocess command injection.
+    - path: "**/*.yml"
+      instructions: >
+        Focus on YAML best practices, correct indentation, valid syntax,
+        and consistent structure. Flag any schema issues or misconfigurations.
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
   tools:
     clippy:
       enabled: true
