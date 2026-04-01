@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::sync::MutexGuard;
 
 use crate::core::branch::{self, BranchOptions};
@@ -129,9 +129,33 @@ pub(crate) fn git_output(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
+pub(crate) fn synthetic_exit_status(success: bool) -> ExitStatus {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        if success {
+            ExitStatus::from_raw(0)
+        } else {
+            ExitStatus::from_raw(1 << 8)
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt;
+
+        if success {
+            ExitStatus::from_raw(0)
+        } else {
+            ExitStatus::from_raw(1)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{git_output, initialize_main_repo, with_temp_repo};
+    use super::{git_output, initialize_main_repo, synthetic_exit_status, with_temp_repo};
 
     #[test]
     fn git_output_trims_trailing_newlines() {
@@ -140,5 +164,11 @@ mod tests {
 
             assert_eq!(git_output(repo, &["branch", "--show-current"]), "main");
         });
+    }
+
+    #[test]
+    fn synthetic_failure_status_is_non_zero() {
+        assert!(synthetic_exit_status(true).success());
+        assert!(!synthetic_exit_status(false).success());
     }
 }

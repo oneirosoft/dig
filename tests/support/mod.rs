@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
+use std::env;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 #[cfg(unix)]
@@ -169,22 +170,52 @@ pub fn install_fake_executable(bin_dir: &Path, name: &str, script: &str) {
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).unwrap();
     }
-}
-
-pub fn path_with_prepend(dir: &Path) -> String {
-    let existing_path = std::env::var("PATH").unwrap_or_default();
-    if existing_path.is_empty() {
-        dir.display().to_string()
-    } else {
-        format!("{}:{existing_path}", dir.display())
+    #[cfg(windows)]
+    {
+        let wrapper_path = bin_dir.join(format!("{name}.cmd"));
+        let shell_path = shell_binary_path();
+        let wrapper = format!(
+            "@echo off\r\n\"{}\" \"{}\" %*\r\n",
+            shell_path.display(),
+            path.display()
+        );
+        fs::write(wrapper_path, wrapper).unwrap();
     }
 }
 
-pub fn git_binary_path() -> String {
-    let output = Command::new("which").arg("git").output().unwrap();
-    assert!(output.status.success(), "which git failed");
+pub fn path_with_prepend(dir: &Path) -> String {
+    let existing_path = env::var_os("PATH").unwrap_or_default();
+    let combined =
+        env::join_paths(std::iter::once(dir.to_path_buf()).chain(env::split_paths(&existing_path)))
+            .unwrap();
 
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
+    combined.to_string_lossy().into_owned()
+}
+
+pub fn git_binary_path() -> String {
+    command_path("git").to_string_lossy().replace('\\', "/")
+}
+
+fn command_path(command: &str) -> PathBuf {
+    #[cfg(unix)]
+    let lookup = "which";
+    #[cfg(windows)]
+    let lookup = "where";
+
+    let output = Command::new(lookup).arg(command).output().unwrap();
+    assert!(output.status.success(), "{lookup} {command} failed");
+
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap()
+}
+
+#[cfg(windows)]
+fn shell_binary_path() -> PathBuf {
+    command_path("sh")
 }
 
 pub fn load_state_json(repo: &Path) -> Value {
