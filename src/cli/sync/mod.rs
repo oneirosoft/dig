@@ -15,7 +15,7 @@ use crate::core::merge;
 use crate::core::store::{PendingOperationKind, load_operation, open_initialized};
 use crate::core::sync::{
     self, RemotePushActionKind, RemotePushOutcome, SyncCompletion, SyncEvent, SyncOptions,
-    SyncStage,
+    SyncStage, SyncStatus,
 };
 use crate::core::tree::{self, TreeOptions, TreeView};
 
@@ -201,15 +201,31 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
                 }
 
                 if final_status.success() {
-                    let pull_request_update_plan =
-                        sync::plan_pull_request_updates(&restacked_branch_names)?;
+                    let pull_request_update_plan = if animate {
+                        plan_pull_request_updates_with_animation(
+                            runtime
+                                .as_ref()
+                                .expect("animation runtime should exist for TTY sync"),
+                            &restacked_branch_names,
+                        )?
+                    } else {
+                        sync::plan_pull_request_updates(&restacked_branch_names)?
+                    };
                     if !pull_request_update_plan.actions.is_empty() {
                         if printed_output {
                             println!();
                         }
 
-                        let updated_pull_requests =
-                            sync::execute_pull_request_update_plan(&pull_request_update_plan)?;
+                        let updated_pull_requests = if animate {
+                            execute_pull_request_update_plan_with_animation(
+                                runtime
+                                    .as_ref()
+                                    .expect("animation runtime should exist for TTY sync"),
+                                pull_request_update_plan.clone(),
+                            )?
+                        } else {
+                            sync::execute_pull_request_update_plan(&pull_request_update_plan)?
+                        };
                         let output =
                             format_pull_request_update_success_output(&updated_pull_requests);
                         if !output.is_empty() {
@@ -235,7 +251,16 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
                         } else {
                             println!();
 
-                            let push_outcome = sync::execute_remote_push_plan(&push_plan)?;
+                            let push_outcome = if animate {
+                                execute_remote_push_plan_with_animation(
+                                    runtime
+                                        .as_ref()
+                                        .expect("animation runtime should exist for TTY sync"),
+                                    push_plan.clone(),
+                                )?
+                            } else {
+                                sync::execute_remote_push_plan(&push_plan)?
+                            };
                             final_status = push_outcome.status;
 
                             if push_outcome.status.success() {
@@ -322,6 +347,8 @@ enum WorkerMessage<Event, Outcome> {
 struct SyncAnimationSession {
     terminal: Option<render::AnimationTerminal>,
     stage: Option<ActiveSyncStage>,
+    status: Option<SyncStatus>,
+    status_frame_index: usize,
     initial_local_view: Option<TreeView>,
 }
 
@@ -335,12 +362,30 @@ impl SyncAnimationSession {
         Self {
             terminal: None,
             stage: None,
+            status: None,
+            status_frame_index: 0,
             initial_local_view,
         }
     }
 
     fn apply(&mut self, event: SyncEvent) -> io::Result<()> {
         match event {
+            SyncEvent::StatusChanged(status) => {
+                if self.status.as_ref() == Some(&status) {
+                    return Ok(());
+                }
+
+                self.status = Some(status);
+                self.status_frame_index = 0;
+
+                if self.stage.is_some() || self.terminal.is_some() {
+                    self.render_active()?;
+                } else {
+                    self.start_terminal_and_render_active()?;
+                }
+
+                Ok(())
+            }
             SyncEvent::StageStarted(SyncStage::LocalSync { .. }) => {
                 if let Some(ActiveSyncStage::Local(animation)) = self.stage.as_mut() {
                     if animation.apply_event(&event) {
@@ -356,11 +401,8 @@ impl SyncAnimationSession {
 
                 let mut animation = render::SyncAnimation::new(&view);
                 animation.apply_event(&event);
-                let mut terminal = render::AnimationTerminal::start()?;
-                terminal.render(&animation.render_active())?;
-                self.terminal = Some(terminal);
                 self.stage = Some(ActiveSyncStage::Local(animation));
-                Ok(())
+                self.start_terminal_and_render_active()
             }
             SyncEvent::StageStarted(SyncStage::CleanupResume {
                 plan,
@@ -376,18 +418,28 @@ impl SyncAnimationSession {
                     &untracked_branches,
                     &active_branch_name,
                 );
-                let mut terminal = render::AnimationTerminal::start()?;
-                terminal.render(&animation.render_active())?;
-                self.terminal = Some(terminal);
                 self.stage = Some(ActiveSyncStage::Cleanup(animation));
-                Ok(())
+                self.start_terminal_and_render_active()
             }
             SyncEvent::Cleanup(clean_event) => {
                 let Some(ActiveSyncStage::Cleanup(animation)) = self.stage.as_mut() else {
                     return Ok(());
                 };
 
-                if animation.apply_event(&clean_event) {
+                let status_changed =
+                    if let Some(status) = render::status_from_clean_event(&clean_event) {
+                        if self.status.as_ref() == Some(&status) {
+                            false
+                        } else {
+                            self.status = Some(status);
+                            self.status_frame_index = 0;
+                            true
+                        }
+                    } else {
+                        false
+                    };
+
+                if animation.apply_event(&clean_event) || status_changed {
                     self.render_active()?;
                 }
 
@@ -408,14 +460,19 @@ impl SyncAnimationSession {
     }
 
     fn tick(&mut self) -> io::Result<()> {
-        let Some(stage) = self.stage.as_mut() else {
-            return Ok(());
-        };
+        let mut changed = false;
 
-        let changed = match stage {
-            ActiveSyncStage::Local(animation) => animation.tick(),
-            ActiveSyncStage::Cleanup(animation) => animation.tick(),
-        };
+        if self.status.is_some() {
+            self.status_frame_index = self.status_frame_index.wrapping_add(1);
+            changed = true;
+        }
+
+        if let Some(stage) = self.stage.as_mut() {
+            changed |= match stage {
+                ActiveSyncStage::Local(animation) => animation.tick(),
+                ActiveSyncStage::Cleanup(animation) => animation.tick(),
+            };
+        }
 
         if changed {
             self.render_active()?;
@@ -429,7 +486,7 @@ impl SyncAnimationSession {
             return Ok(());
         };
         let Some(stage) = self.stage.take() else {
-            return Ok(());
+            return terminal.finish_and_clear();
         };
 
         let frame = match stage {
@@ -444,7 +501,7 @@ impl SyncAnimationSession {
             return Ok(());
         };
         let Some(stage) = self.stage.take() else {
-            return Ok(());
+            return terminal.finish_and_clear();
         };
 
         let frame = match stage {
@@ -459,14 +516,78 @@ impl SyncAnimationSession {
             return Ok(());
         };
         let Some(stage) = self.stage.as_ref() else {
+            if let Some(status) = self.status.as_ref() {
+                let frame =
+                    render::render_active_frame(Some((status, self.status_frame_index)), None);
+                return terminal.render(&frame);
+            }
+
             return Ok(());
         };
 
-        let frame = match stage {
+        let body = match stage {
             ActiveSyncStage::Local(animation) => animation.render_active(),
             ActiveSyncStage::Cleanup(animation) => animation.render_active(),
         };
+        let frame = render::render_active_frame(
+            self.status
+                .as_ref()
+                .map(|status| (status, self.status_frame_index)),
+            Some(&body),
+        );
         terminal.render(&frame)
+    }
+
+    fn start_terminal_and_render_active(&mut self) -> io::Result<()> {
+        if self.terminal.is_none() {
+            self.terminal = Some(render::AnimationTerminal::start()?);
+        }
+
+        self.render_active()
+    }
+}
+
+struct SyncStatusSession {
+    terminal: render::AnimationTerminal,
+    status: SyncStatus,
+    frame_index: usize,
+}
+
+impl SyncStatusSession {
+    fn start(status: SyncStatus) -> io::Result<Self> {
+        let mut session = Self {
+            terminal: render::AnimationTerminal::start()?,
+            status,
+            frame_index: 0,
+        };
+        session.render()?;
+        Ok(session)
+    }
+
+    fn apply(&mut self, status: SyncStatus) -> io::Result<()> {
+        if self.status == status {
+            return Ok(());
+        }
+
+        self.status = status;
+        self.frame_index = 0;
+        self.render()
+    }
+
+    fn tick(&mut self) -> io::Result<()> {
+        self.frame_index = self.frame_index.wrapping_add(1);
+        self.render()
+    }
+
+    fn finish_clear(&mut self) -> io::Result<()> {
+        self.terminal.finish_and_clear()
+    }
+
+    fn render(&mut self) -> io::Result<()> {
+        self.terminal.render(&render::render_active_frame(
+            Some((&self.status, self.frame_index)),
+            None,
+        ))
     }
 }
 
@@ -528,6 +649,148 @@ async fn drive_sync_animation(
     }
 }
 
+fn plan_pull_request_updates_with_animation(
+    runtime: &Runtime,
+    restacked_branch_names: &[String],
+) -> io::Result<sync::PullRequestUpdatePlan> {
+    let restacked_branch_names = restacked_branch_names.to_vec();
+    execute_status_task_with_animation(
+        runtime,
+        SyncStatus::InspectingPullRequestUpdates,
+        move |_| sync::plan_pull_request_updates(&restacked_branch_names),
+    )
+}
+
+fn execute_pull_request_update_plan_with_animation(
+    runtime: &Runtime,
+    plan: sync::PullRequestUpdatePlan,
+) -> io::Result<Vec<sync::PullRequestUpdateAction>> {
+    execute_status_task_with_animation(
+        runtime,
+        SyncStatus::InspectingPullRequestUpdates,
+        move |sender| {
+            sync::execute_pull_request_update_plan_with_reporter(&plan, &mut |status| {
+                let _ = sender.blocking_send(WorkerMessage::Event(status));
+                Ok(())
+            })
+        },
+    )
+}
+
+fn execute_remote_push_plan_with_animation(
+    runtime: &Runtime,
+    plan: sync::RemotePushPlan,
+) -> io::Result<sync::RemotePushOutcome> {
+    let initial_status = plan
+        .actions
+        .first()
+        .map(|action| SyncStatus::PushingRemoteBranch {
+            branch_name: action.target.branch_name.clone(),
+            remote_name: action.target.remote_name.clone(),
+            kind: action.kind,
+        })
+        .expect("remote push animation requires at least one action");
+
+    execute_status_task_with_animation(runtime, initial_status, move |sender| {
+        sync::execute_remote_push_plan_with_reporter(&plan, &mut |status| {
+            let _ = sender.blocking_send(WorkerMessage::Event(status));
+            Ok(())
+        })
+    })
+}
+
+fn execute_status_task_with_animation<Outcome, Task>(
+    runtime: &Runtime,
+    initial_status: SyncStatus,
+    task: Task,
+) -> io::Result<Outcome>
+where
+    Outcome: Send + 'static,
+    Task: FnOnce(mpsc::Sender<WorkerMessage<SyncStatus, Outcome>>) -> io::Result<Outcome>
+        + Send
+        + 'static,
+{
+    runtime.block_on(execute_status_task_with_animation_async(
+        initial_status,
+        task,
+    ))
+}
+
+async fn execute_status_task_with_animation_async<Outcome, Task>(
+    initial_status: SyncStatus,
+    task: Task,
+) -> io::Result<Outcome>
+where
+    Outcome: Send + 'static,
+    Task: FnOnce(mpsc::Sender<WorkerMessage<SyncStatus, Outcome>>) -> io::Result<Outcome>
+        + Send
+        + 'static,
+{
+    let (sender, mut receiver) = mpsc::channel::<WorkerMessage<SyncStatus, Outcome>>(64);
+    let worker = tokio::task::spawn_blocking(move || {
+        let task_sender = sender.clone();
+        let _ = sender.blocking_send(WorkerMessage::Event(initial_status));
+        let outcome = task(task_sender);
+        let _ = sender.blocking_send(WorkerMessage::Finished(outcome));
+    });
+
+    let mut animation = None;
+    let outcome = drive_status_animation(&mut animation, &mut receiver).await;
+    let worker_result = worker.await;
+
+    if let Some(animation) = animation.as_mut() {
+        animation.finish_clear()?;
+    }
+
+    if let Err(err) = worker_result {
+        return Err(io::Error::other(err.to_string()));
+    }
+
+    outcome
+}
+
+async fn drive_status_animation<Outcome>(
+    animation: &mut Option<SyncStatusSession>,
+    receiver: &mut mpsc::Receiver<WorkerMessage<SyncStatus, Outcome>>,
+) -> io::Result<Outcome> {
+    loop {
+        match time::timeout(Duration::from_millis(80), receiver.recv()).await {
+            Ok(Some(WorkerMessage::Event(status))) => {
+                if let Some(animation) = animation.as_mut() {
+                    animation.apply(status)?;
+                } else {
+                    *animation = Some(SyncStatusSession::start(status)?);
+                }
+            }
+            Ok(Some(WorkerMessage::Finished(outcome))) => {
+                return drain_worker_messages(
+                    receiver,
+                    |status| {
+                        if let Some(animation) = animation.as_mut() {
+                            animation.apply(status)?;
+                        } else {
+                            *animation = Some(SyncStatusSession::start(status)?);
+                        }
+
+                        Ok(())
+                    },
+                    outcome,
+                );
+            }
+            Ok(None) => {
+                return Err(io::Error::other(
+                    "sync status animation worker ended unexpectedly",
+                ));
+            }
+            Err(_) => {
+                if let Some(animation) = animation.as_mut() {
+                    animation.tick()?;
+                }
+            }
+        }
+    }
+}
+
 fn execute_cleanup_with_animation(
     runtime: &Runtime,
     plan: &clean::CleanPlan,
@@ -539,8 +802,13 @@ async fn execute_cleanup_with_animation_async(
     plan: clean::CleanPlan,
 ) -> io::Result<clean::CleanApplyOutcome> {
     let mut animation = super::clean::render::CleanAnimation::new(&plan);
+    let mut status = initial_cleanup_status(&plan);
+    let mut status_frame_index = 0;
     let mut terminal = render::AnimationTerminal::start()?;
-    terminal.render(&animation.render_active())?;
+    terminal.render(&render::render_active_frame(
+        status.as_ref().map(|status| (status, status_frame_index)),
+        Some(&animation.render_active()),
+    ))?;
 
     let (sender, mut receiver) =
         mpsc::channel::<WorkerMessage<clean::CleanEvent, clean::CleanApplyOutcome>>(64);
@@ -552,7 +820,14 @@ async fn execute_cleanup_with_animation_async(
         let _ = sender.blocking_send(WorkerMessage::Finished(outcome));
     });
 
-    let outcome = drive_cleanup_animation(&mut terminal, &mut animation, &mut receiver).await;
+    let outcome = drive_cleanup_animation(
+        &mut terminal,
+        &mut animation,
+        &mut status,
+        &mut status_frame_index,
+        &mut receiver,
+    )
+    .await;
     let worker_result = worker.await;
 
     if let Err(err) = worker_result {
@@ -562,9 +837,15 @@ async fn execute_cleanup_with_animation_async(
     let outcome = outcome?;
 
     if outcome.status.success() {
-        terminal.finish(&animation.render_final())?;
+        terminal.finish(&render::render_active_frame(
+            None,
+            Some(&animation.render_final()),
+        ))?;
     } else {
-        terminal.finish(&animation.render_active())?;
+        terminal.finish(&render::render_active_frame(
+            None,
+            Some(&animation.render_active()),
+        ))?;
         if outcome.paused {
             common::print_restack_pause_guidance(outcome.failure_output.as_deref());
         } else {
@@ -578,21 +859,32 @@ async fn execute_cleanup_with_animation_async(
 async fn drive_cleanup_animation(
     terminal: &mut render::AnimationTerminal,
     animation: &mut super::clean::render::CleanAnimation,
+    status: &mut Option<SyncStatus>,
+    status_frame_index: &mut usize,
     receiver: &mut mpsc::Receiver<WorkerMessage<clean::CleanEvent, clean::CleanApplyOutcome>>,
 ) -> io::Result<clean::CleanApplyOutcome> {
     loop {
         match time::timeout(Duration::from_millis(80), receiver.recv()).await {
             Ok(Some(WorkerMessage::Event(event))) => {
-                if animation.apply_event(&event) {
-                    terminal.render(&animation.render_active())?;
+                let status_changed = apply_cleanup_status(status, status_frame_index, &event);
+                if animation.apply_event(&event) || status_changed {
+                    terminal.render(&render::render_active_frame(
+                        status.as_ref().map(|status| (status, *status_frame_index)),
+                        Some(&animation.render_active()),
+                    ))?;
                 }
             }
             Ok(Some(WorkerMessage::Finished(outcome))) => {
                 return drain_worker_messages(
                     receiver,
                     |event| {
-                        if animation.apply_event(&event) {
-                            terminal.render(&animation.render_active())?;
+                        let status_changed =
+                            apply_cleanup_status(status, status_frame_index, &event);
+                        if animation.apply_event(&event) || status_changed {
+                            terminal.render(&render::render_active_frame(
+                                status.as_ref().map(|status| (status, *status_frame_index)),
+                                Some(&animation.render_active()),
+                            ))?;
                         }
 
                         Ok(())
@@ -606,12 +898,65 @@ async fn drive_cleanup_animation(
                 ));
             }
             Err(_) => {
+                let mut changed = false;
+
+                if status.is_some() {
+                    *status_frame_index = (*status_frame_index).wrapping_add(1);
+                    changed = true;
+                }
+
                 if animation.tick() {
-                    terminal.render(&animation.render_active())?;
+                    changed = true;
+                }
+
+                if changed {
+                    terminal.render(&render::render_active_frame(
+                        status.as_ref().map(|status| (status, *status_frame_index)),
+                        Some(&animation.render_active()),
+                    ))?;
                 }
             }
         }
     }
+}
+
+fn initial_cleanup_status(plan: &clean::CleanPlan) -> Option<SyncStatus> {
+    let candidate = plan.candidates.first()?;
+
+    if let Some(restack_branch) = candidate.restack_plan.first() {
+        return Some(SyncStatus::RestackingBranch {
+            branch_name: restack_branch.branch_name.clone(),
+            onto_branch: restack_branch.onto_branch.clone(),
+        });
+    }
+
+    if candidate.is_deleted_locally() {
+        Some(SyncStatus::ArchivingBranch {
+            branch_name: candidate.branch_name.clone(),
+        })
+    } else {
+        Some(SyncStatus::DeletingBranch {
+            branch_name: candidate.branch_name.clone(),
+        })
+    }
+}
+
+fn apply_cleanup_status(
+    status: &mut Option<SyncStatus>,
+    status_frame_index: &mut usize,
+    event: &clean::CleanEvent,
+) -> bool {
+    let Some(next_status) = render::status_from_clean_event(event) else {
+        return false;
+    };
+
+    if status.as_ref() == Some(&next_status) {
+        return false;
+    }
+
+    *status = Some(next_status);
+    *status_frame_index = 0;
+    true
 }
 
 fn drain_worker_messages<Event, Outcome>(

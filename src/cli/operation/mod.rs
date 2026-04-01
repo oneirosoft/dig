@@ -29,14 +29,7 @@ impl AnimationTerminal {
     }
 
     pub fn render(&mut self, frame: &str) -> io::Result<()> {
-        if self.rendered_line_count > 0 {
-            write!(self.stdout, "\r")?;
-
-            if self.rendered_line_count > 1 {
-                write!(self.stdout, "\x1b[{}A", self.rendered_line_count - 1)?;
-            }
-        }
-
+        self.reposition_cursor()?;
         write!(self.stdout, "{ANSI_CLEAR_TO_END}{frame}")?;
         self.stdout
             .flush()
@@ -48,6 +41,27 @@ impl AnimationTerminal {
         write!(self.stdout, "{ANSI_SHOW_CURSOR}\n")?;
         self.stdout.flush()?;
         self.active = false;
+        Ok(())
+    }
+
+    pub fn finish_and_clear(&mut self) -> io::Result<()> {
+        self.reposition_cursor()?;
+        write!(self.stdout, "{ANSI_CLEAR_TO_END}{ANSI_SHOW_CURSOR}")?;
+        self.stdout.flush()?;
+        self.rendered_line_count = 0;
+        self.active = false;
+        Ok(())
+    }
+
+    fn reposition_cursor(&mut self) -> io::Result<()> {
+        if self.rendered_line_count > 0 {
+            write!(self.stdout, "\r")?;
+
+            if self.rendered_line_count > 1 {
+                write!(self.stdout, "\x1b[{}A", self.rendered_line_count - 1)?;
+            }
+        }
+
         Ok(())
     }
 }

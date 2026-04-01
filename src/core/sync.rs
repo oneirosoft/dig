@@ -39,7 +39,41 @@ pub enum SyncStage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncStatus {
+    FetchingRemotes,
+    RepairingClosedPullRequests,
+    RemovingMergedLocalBranches,
+    ReconcilingDeletedLocalBranch {
+        step_branch_name: String,
+    },
+    PreparingRestack {
+        step_branch_name: String,
+    },
+    RestackingBranch {
+        branch_name: String,
+        onto_branch: String,
+    },
+    InspectingPullRequestUpdates,
+    UpdatingPullRequestBase {
+        branch_name: String,
+        pull_request_number: u64,
+    },
+    PushingRemoteBranch {
+        branch_name: String,
+        remote_name: String,
+        kind: RemotePushActionKind,
+    },
+    DeletingBranch {
+        branch_name: String,
+    },
+    ArchivingBranch {
+        branch_name: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncEvent {
+    StatusChanged(SyncStatus),
     StageStarted(SyncStage),
     BranchArchived {
         branch_name: String,
@@ -257,6 +291,10 @@ where
             let mut restacked_branches = payload.restacked_branches.clone();
             restacked_branches.extend(pending_operation.completed_branches().iter().cloned());
             let active_action = pending_operation.active_action().clone();
+            reporter(SyncEvent::StatusChanged(SyncStatus::RestackingBranch {
+                branch_name: active_action.branch_name.clone(),
+                onto_branch: active_action.new_base.branch_name.clone(),
+            }))?;
             reporter(SyncEvent::StageStarted(SyncStage::CleanupResume {
                 plan: clean::plan_for_resume(&payload)?,
                 active_branch_name: active_action.branch_name.clone(),
@@ -357,14 +395,21 @@ where
     workflow::ensure_ready_for_operation(&session.repo, "sync")?;
     workflow::ensure_no_pending_operation(&session.paths, "sync")?;
     clean::reconcile_branch_divergence_state(&mut session)?;
+    reporter(SyncEvent::StatusChanged(SyncStatus::FetchingRemotes))?;
     let remote_sync_enabled = fetch_sync_remotes(&session)?;
     let repaired_pull_requests = if remote_sync_enabled {
+        reporter(SyncEvent::StatusChanged(
+            SyncStatus::RepairingClosedPullRequests,
+        ))?;
         repair_closed_pull_requests_for_deleted_parent_branches(&session)?
     } else {
         Vec::new()
     };
     let original_branch = git::current_branch_name()?;
     if remote_sync_enabled {
+        reporter(SyncEvent::StatusChanged(
+            SyncStatus::RemovingMergedLocalBranches,
+        ))?;
         delete_local_branches_merged_into_deleted_parent_branches(&session, &original_branch)?;
     }
     let outcome = execute_local_sync(
@@ -440,6 +485,10 @@ fn report_resumed_full_sync_stage_started<F>(
 where
     F: FnMut(SyncEvent) -> io::Result<()>,
 {
+    reporter(SyncEvent::StatusChanged(status_for_local_sync_phase(
+        payload.phase,
+        &payload.step_branch_name,
+    )))?;
     let mut resumed_restacked_branches = payload.restacked_branches.clone();
     resumed_restacked_branches.extend(pending_operation.completed_branches().iter().cloned());
 
@@ -460,6 +509,10 @@ fn report_sync_continue_progress<F>(
 where
     F: FnMut(SyncEvent) -> io::Result<()>,
 {
+    reporter(SyncEvent::StatusChanged(SyncStatus::RestackingBranch {
+        branch_name: action.branch_name.clone(),
+        onto_branch: action.new_base.branch_name.clone(),
+    }))?;
     reporter(SyncEvent::RestackProgress {
         branch_name: action.branch_name.clone(),
         onto_branch: action.new_base.branch_name.clone(),
@@ -476,6 +529,10 @@ fn report_cleanup_continue_progress<F>(
 where
     F: FnMut(SyncEvent) -> io::Result<()>,
 {
+    reporter(SyncEvent::StatusChanged(SyncStatus::RestackingBranch {
+        branch_name: action.branch_name.clone(),
+        onto_branch: action.new_base.branch_name.clone(),
+    }))?;
     reporter(SyncEvent::Cleanup(clean::CleanEvent::RebaseProgress {
         branch_name: action.branch_name.clone(),
         onto_branch: action.new_base.branch_name.clone(),
@@ -813,6 +870,10 @@ fn report_local_sync_stage_started<F>(
 where
     F: FnMut(SyncEvent) -> io::Result<()>,
 {
+    reporter(SyncEvent::StatusChanged(status_for_local_sync_phase(
+        phase,
+        step_branch_name,
+    )))?;
     reporter(SyncEvent::StageStarted(SyncStage::LocalSync {
         phase,
         step_branch_name: step_branch_name.to_string(),
@@ -820,6 +881,19 @@ where
         deleted_branches: progress.deleted_branches.clone(),
         restacked_branches: progress.restacked_branches.clone(),
     }))
+}
+
+fn status_for_local_sync_phase(phase: PendingSyncPhase, step_branch_name: &str) -> SyncStatus {
+    match phase {
+        PendingSyncPhase::ReconcileDeletedLocalBranches => {
+            SyncStatus::ReconcilingDeletedLocalBranch {
+                step_branch_name: step_branch_name.to_string(),
+            }
+        }
+        PendingSyncPhase::RestackOutdatedLocalStacks => SyncStatus::PreparingRestack {
+            step_branch_name: step_branch_name.to_string(),
+        },
+    }
 }
 
 fn report_restack_event<F>(
@@ -830,11 +904,21 @@ where
     F: FnMut(SyncEvent) -> io::Result<()>,
 {
     match event {
-        workflow::RestackExecutionEvent::Started(action) => reporter(SyncEvent::RestackStarted {
-            branch_name: action.branch_name.clone(),
-            onto_branch: action.new_base.branch_name.clone(),
-        }),
+        workflow::RestackExecutionEvent::Started(action) => {
+            reporter(SyncEvent::StatusChanged(SyncStatus::RestackingBranch {
+                branch_name: action.branch_name.clone(),
+                onto_branch: action.new_base.branch_name.clone(),
+            }))?;
+            reporter(SyncEvent::RestackStarted {
+                branch_name: action.branch_name.clone(),
+                onto_branch: action.new_base.branch_name.clone(),
+            })
+        }
         workflow::RestackExecutionEvent::Progress { action, progress } => {
+            reporter(SyncEvent::StatusChanged(SyncStatus::RestackingBranch {
+                branch_name: action.branch_name.clone(),
+                onto_branch: action.new_base.branch_name.clone(),
+            }))?;
             reporter(SyncEvent::RestackProgress {
                 branch_name: action.branch_name.clone(),
                 onto_branch: action.new_base.branch_name.clone(),
@@ -1264,9 +1348,24 @@ pub fn plan_remote_pushes(
 }
 
 pub fn execute_remote_push_plan(plan: &RemotePushPlan) -> io::Result<RemotePushOutcome> {
+    execute_remote_push_plan_with_reporter(plan, &mut |_| Ok(()))
+}
+
+pub fn execute_remote_push_plan_with_reporter<F>(
+    plan: &RemotePushPlan,
+    reporter: &mut F,
+) -> io::Result<RemotePushOutcome>
+where
+    F: FnMut(SyncStatus) -> io::Result<()>,
+{
     let mut pushed_actions = Vec::new();
 
     for action in &plan.actions {
+        reporter(SyncStatus::PushingRemoteBranch {
+            branch_name: action.target.branch_name.clone(),
+            remote_name: action.target.remote_name.clone(),
+            kind: action.kind,
+        })?;
         let push_output = match action.kind {
             RemotePushActionKind::CreateRemoteBranch | RemotePushActionKind::UpdateRemoteBranch => {
                 git::push_branch_to_remote(&action.target)?
@@ -1344,9 +1443,23 @@ pub fn plan_pull_request_updates(
 pub fn execute_pull_request_update_plan(
     plan: &PullRequestUpdatePlan,
 ) -> io::Result<Vec<PullRequestUpdateAction>> {
+    execute_pull_request_update_plan_with_reporter(plan, &mut |_| Ok(()))
+}
+
+pub fn execute_pull_request_update_plan_with_reporter<F>(
+    plan: &PullRequestUpdatePlan,
+    reporter: &mut F,
+) -> io::Result<Vec<PullRequestUpdateAction>>
+where
+    F: FnMut(SyncStatus) -> io::Result<()>,
+{
     let mut updated_actions = Vec::new();
 
     for action in &plan.actions {
+        reporter(SyncStatus::UpdatingPullRequestBase {
+            branch_name: action.branch_name.clone(),
+            pull_request_number: action.pull_request_number,
+        })?;
         gh::retarget_pull_request_base(action.pull_request_number, &action.new_base_branch_name)
             .map_err(|err| {
                 io::Error::other(format!(
@@ -1431,19 +1544,89 @@ fn plan_remote_push_action(
 #[cfg(test)]
 mod tests {
     use super::{
-        RemotePushActionKind, SyncEvent, SyncOptions, SyncStage, plan_remote_pushes,
-        pull_request_needs_repair, run, run_with_reporter,
+        PullRequestUpdatePlan, RemotePushActionKind, RemotePushPlan, SyncEvent, SyncOptions,
+        SyncStage, SyncStatus, execute_pull_request_update_plan_with_reporter,
+        execute_remote_push_plan_with_reporter, plan_remote_pushes, pull_request_needs_repair, run,
+        run_with_reporter,
     };
     use crate::core::gh::{PullRequestState, PullRequestStatus};
+    use crate::core::git::BranchPushTarget;
     use crate::core::test_support::{
-        append_file, commit_file, create_tracked_branch, git_ok, initialize_main_repo,
+        append_file, commit_file, create_tracked_branch, git_ok, git_output, initialize_main_repo,
         with_temp_repo,
     };
+    use std::env;
+    use std::fs;
+    use std::path::Path;
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     fn initialize_origin_remote(repo: &std::path::Path) {
-        git_ok(repo, &["init", "--bare", "origin.git"]);
-        git_ok(repo, &["remote", "add", "origin", "origin.git"]);
+        git_ok(repo, &["init", "--bare", ".git/origin.git"]);
+        git_ok(repo, &["remote", "add", "origin", ".git/origin.git"]);
         git_ok(repo, &["push", "-u", "origin", "main"]);
+        git_ok(
+            repo,
+            &[
+                "--git-dir=.git/origin.git",
+                "symbolic-ref",
+                "HEAD",
+                "refs/heads/main",
+            ],
+        );
+    }
+
+    fn install_fake_executable(bin_dir: &Path, name: &str, script: &str) {
+        fs::create_dir_all(bin_dir).unwrap();
+        let path = bin_dir.join(name);
+        fs::write(&path, script).unwrap();
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(&path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+    }
+
+    fn path_with_prepend(dir: &Path) -> String {
+        let existing_path = env::var("PATH").unwrap_or_default();
+        if existing_path.is_empty() {
+            dir.display().to_string()
+        } else {
+            format!("{}:{existing_path}", dir.display())
+        }
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original_value: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: String) -> Self {
+            let original_value = env::var(key).ok();
+            unsafe {
+                env::set_var(key, value);
+            }
+            Self {
+                key,
+                original_value,
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.original_value {
+                Some(value) => unsafe {
+                    env::set_var(self.key, value);
+                },
+                None => unsafe {
+                    env::remove_var(self.key);
+                },
+            }
+        }
     }
 
     #[test]
@@ -1589,6 +1772,190 @@ mod tests {
     }
 
     #[test]
+    fn emits_preflight_status_events_before_first_local_sync_stage() {
+        with_temp_repo("dgr-sync-core", |repo| {
+            initialize_main_repo(repo);
+            initialize_origin_remote(repo);
+            crate::core::init::run(&crate::core::init::InitOptions::default()).unwrap();
+            create_tracked_branch("feat/auth");
+            commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+            git_ok(repo, &["push", "-u", "origin", "feat/auth"]);
+            git_ok(repo, &["checkout", "main"]);
+            commit_file(repo, "README.md", "root\nmain\n", "feat: trunk follow-up");
+            git_ok(repo, &["checkout", "feat/auth"]);
+
+            let mut events = Vec::new();
+            let outcome = run_with_reporter(&SyncOptions::default(), &mut |event| {
+                events.push(event.clone());
+                Ok(())
+            })
+            .unwrap();
+
+            assert!(outcome.status.success());
+            let fetch_index = events
+                .iter()
+                .position(|event| {
+                    matches!(event, SyncEvent::StatusChanged(SyncStatus::FetchingRemotes))
+                })
+                .unwrap();
+            let repair_index = events
+                .iter()
+                .position(|event| {
+                    matches!(
+                        event,
+                        SyncEvent::StatusChanged(SyncStatus::RepairingClosedPullRequests)
+                    )
+                })
+                .unwrap();
+            let prune_index = events
+                .iter()
+                .position(|event| {
+                    matches!(
+                        event,
+                        SyncEvent::StatusChanged(SyncStatus::RemovingMergedLocalBranches)
+                    )
+                })
+                .unwrap();
+            let stage_index = events
+                .iter()
+                .position(|event| {
+                    matches!(event, SyncEvent::StageStarted(SyncStage::LocalSync { .. }))
+                })
+                .unwrap();
+
+            assert!(fetch_index < repair_index);
+            assert!(repair_index < prune_index);
+            assert!(prune_index < stage_index);
+        });
+    }
+
+    #[test]
+    fn reports_pull_request_base_updates_before_each_retarget() {
+        with_temp_repo("dgr-sync-core", |repo| {
+            initialize_main_repo(repo);
+
+            let bin_dir = repo.join("fake-bin");
+            let log_path = repo.join("gh.log");
+            install_fake_executable(
+                &bin_dir,
+                "gh",
+                &format!(
+                    "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\n",
+                    log_path.display()
+                ),
+            );
+            fs::write(&log_path, "").unwrap();
+            let _path_guard = EnvVarGuard::set("PATH", path_with_prepend(&bin_dir));
+
+            let plan = PullRequestUpdatePlan {
+                actions: vec![
+                    super::PullRequestUpdateAction {
+                        branch_name: "feat/auth".into(),
+                        pull_request_number: 42,
+                        new_base_branch_name: "main".into(),
+                    },
+                    super::PullRequestUpdateAction {
+                        branch_name: "feat/auth-ui".into(),
+                        pull_request_number: 43,
+                        new_base_branch_name: "feat/auth".into(),
+                    },
+                ],
+            };
+            let mut statuses = Vec::new();
+
+            let updated = execute_pull_request_update_plan_with_reporter(&plan, &mut |status| {
+                statuses.push(status);
+                Ok(())
+            })
+            .unwrap();
+
+            assert_eq!(updated, plan.actions);
+            assert_eq!(
+                statuses,
+                vec![
+                    SyncStatus::UpdatingPullRequestBase {
+                        branch_name: "feat/auth".into(),
+                        pull_request_number: 42,
+                    },
+                    SyncStatus::UpdatingPullRequestBase {
+                        branch_name: "feat/auth-ui".into(),
+                        pull_request_number: 43,
+                    },
+                ]
+            );
+
+            let log = fs::read_to_string(log_path).unwrap();
+            assert!(log.contains("pr edit 42 --base main"));
+            assert!(log.contains("pr edit 43 --base feat/auth"));
+        });
+    }
+
+    #[test]
+    fn reports_remote_push_status_before_each_push() {
+        with_temp_repo("dgr-sync-core", |repo| {
+            initialize_main_repo(repo);
+            initialize_origin_remote(repo);
+            crate::core::init::run(&crate::core::init::InitOptions::default()).unwrap();
+            create_tracked_branch("feat/auth");
+            commit_file(repo, "auth.txt", "auth\n", "feat: auth");
+            create_tracked_branch("feat/auth-ui");
+            commit_file(repo, "ui.txt", "ui\n", "feat: auth ui");
+
+            let plan = RemotePushPlan {
+                actions: vec![
+                    super::RemotePushAction {
+                        target: BranchPushTarget {
+                            remote_name: "origin".into(),
+                            branch_name: "feat/auth".into(),
+                        },
+                        kind: RemotePushActionKind::CreateRemoteBranch,
+                    },
+                    super::RemotePushAction {
+                        target: BranchPushTarget {
+                            remote_name: "origin".into(),
+                            branch_name: "feat/auth-ui".into(),
+                        },
+                        kind: RemotePushActionKind::CreateRemoteBranch,
+                    },
+                ],
+            };
+            let mut statuses = Vec::new();
+
+            let outcome = execute_remote_push_plan_with_reporter(&plan, &mut |status| {
+                statuses.push(status);
+                Ok(())
+            })
+            .unwrap();
+
+            assert!(outcome.status.success());
+            assert_eq!(outcome.pushed_actions, plan.actions);
+            assert_eq!(
+                statuses,
+                vec![
+                    SyncStatus::PushingRemoteBranch {
+                        branch_name: "feat/auth".into(),
+                        remote_name: "origin".into(),
+                        kind: RemotePushActionKind::CreateRemoteBranch,
+                    },
+                    SyncStatus::PushingRemoteBranch {
+                        branch_name: "feat/auth-ui".into(),
+                        remote_name: "origin".into(),
+                        kind: RemotePushActionKind::CreateRemoteBranch,
+                    },
+                ]
+            );
+            assert!(
+                git_output(repo, &["ls-remote", "--heads", "origin", "feat/auth"])
+                    .contains("refs/heads/feat/auth")
+            );
+            assert!(
+                git_output(repo, &["ls-remote", "--heads", "origin", "feat/auth-ui"])
+                    .contains("refs/heads/feat/auth-ui")
+            );
+        });
+    }
+
+    #[test]
     fn emits_local_sync_restack_events_for_outdated_branch_restack() {
         with_temp_repo("dgr-sync-core", |repo| {
             initialize_main_repo(repo);
@@ -1611,12 +1978,29 @@ mod tests {
             assert!(outcome.status.success());
             assert!(matches!(
                 &events[0],
+                SyncEvent::StatusChanged(SyncStatus::FetchingRemotes)
+            ));
+            assert!(matches!(
+                &events[1],
+                SyncEvent::StatusChanged(SyncStatus::PreparingRestack {
+                    step_branch_name,
+                }) if step_branch_name == "feat/auth-ui"
+            ));
+            assert!(matches!(
+                &events[2],
                 SyncEvent::StageStarted(SyncStage::LocalSync {
                     step_branch_name,
                     active_branch_name,
                     ..
                 }) if step_branch_name == "feat/auth-ui" && active_branch_name == "feat/auth-ui"
             ));
+            assert!(events.iter().any(|event| matches!(
+                event,
+                SyncEvent::StatusChanged(SyncStatus::RestackingBranch {
+                    branch_name,
+                    onto_branch,
+                }) if branch_name == "feat/auth-ui" && onto_branch == "feat/auth"
+            )));
             assert!(events.iter().any(|event| matches!(
                 event,
                 SyncEvent::RestackStarted {
@@ -1724,6 +2108,12 @@ mod tests {
             assert!(paused.paused);
             assert!(matches!(
                 &events[0],
+                SyncEvent::StatusChanged(SyncStatus::PreparingRestack {
+                    step_branch_name,
+                }) if step_branch_name == "feat/auth"
+            ));
+            assert!(matches!(
+                &events[1],
                 SyncEvent::StageStarted(SyncStage::LocalSync {
                     active_branch_name,
                     restacked_branches,
