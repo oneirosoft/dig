@@ -158,7 +158,10 @@ impl<'a> BranchGraph<'a> {
                 .unwrap_or_default();
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("cycle detected in branch tree at node {}{}", node_id, branch_info),
+                format!(
+                    "cycle detected in branch tree at node {}{}",
+                    node_id, branch_info
+                ),
             ));
         }
 
