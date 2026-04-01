@@ -293,6 +293,7 @@ where
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_clean_candidate<F>(
     session: &mut crate::core::store::StoreSession,
     original_branch: &str,

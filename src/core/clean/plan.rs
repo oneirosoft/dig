@@ -255,7 +255,7 @@ fn apply_deleted_step_projection(
     let mut projected_state = state.clone();
 
     for step in deleted_steps {
-        deleted_local::simulate_deleted_local_step(&mut projected_state, &step)?;
+        deleted_local::simulate_deleted_local_step(&mut projected_state, step)?;
     }
 
     Ok(projected_state)

@@ -45,7 +45,7 @@ impl AnimationTerminal {
 
     pub fn finish(&mut self, frame: &str) -> io::Result<()> {
         self.render(frame)?;
-        write!(self.stdout, "{ANSI_SHOW_CURSOR}\n")?;
+        writeln!(self.stdout, "{ANSI_SHOW_CURSOR}")?;
         self.stdout.flush()?;
         self.active = false;
         Ok(())

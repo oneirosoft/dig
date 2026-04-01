@@ -481,9 +481,9 @@ fn format_remote_push_plan(plan: &sync::RemotePushPlan) -> String {
 
     for action in &plan.actions {
         let action_label = match action.kind {
-            RemotePushActionKind::CreateRemoteBranch => "create",
-            RemotePushActionKind::UpdateRemoteBranch => "push",
-            RemotePushActionKind::ForceUpdateRemoteBranch => "force-push",
+            RemotePushActionKind::Create => "create",
+            RemotePushActionKind::Update => "push",
+            RemotePushActionKind::ForceUpdate => "force-push",
         };
         lines.push(format!(
             "- {action_label} {} on {}",
@@ -528,9 +528,9 @@ fn format_partial_remote_push_output(header: &str, outcome: &RemotePushOutcome) 
     let mut lines = vec![header.to_string()];
     for action in &outcome.pushed_actions {
         let action_label = match action.kind {
-            RemotePushActionKind::CreateRemoteBranch => "created",
-            RemotePushActionKind::UpdateRemoteBranch => "pushed",
-            RemotePushActionKind::ForceUpdateRemoteBranch => "force-pushed",
+            RemotePushActionKind::Create => "created",
+            RemotePushActionKind::Update => "pushed",
+            RemotePushActionKind::ForceUpdate => "force-pushed",
         };
         lines.push(format!(
             "- {action_label} {} on {}",

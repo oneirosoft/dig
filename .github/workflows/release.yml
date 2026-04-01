@@ -65,7 +65,7 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Run cargo test
-        run: cargo test --locked
+        run: cargo test --locked --release
 
   build:
     name: Build ${{ matrix.target }}

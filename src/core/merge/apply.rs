@@ -282,9 +282,7 @@ fn run_squash_merge(
     let commit_output = git::commit_with_message_file(&message_path);
     let remove_result = fs::remove_file(&message_path);
     let commit_output = commit_output?;
-    if let Err(err) = remove_result {
-        return Err(err);
-    }
+    remove_result?;
 
     Ok(commit_output)
 }

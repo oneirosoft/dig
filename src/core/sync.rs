@@ -93,9 +93,9 @@ pub struct SyncOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemotePushActionKind {
-    CreateRemoteBranch,
-    UpdateRemoteBranch,
-    ForceUpdateRemoteBranch,
+    Create,
+    Update,
+    ForceUpdate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -660,6 +660,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_sync_restack_step<F>(
     session: &mut crate::core::store::StoreSession,
     original_branch: &str,
@@ -1179,10 +1180,10 @@ pub fn execute_remote_push_plan(plan: &RemotePushPlan) -> io::Result<RemotePushO
 
     for action in &plan.actions {
         let push_output = match action.kind {
-            RemotePushActionKind::CreateRemoteBranch | RemotePushActionKind::UpdateRemoteBranch => {
+            RemotePushActionKind::Create | RemotePushActionKind::Update => {
                 git::push_branch_to_remote(&action.target)?
             }
-            RemotePushActionKind::ForceUpdateRemoteBranch => {
+            RemotePushActionKind::ForceUpdate => {
                 git::force_push_branch_to_remote_with_lease(&action.target)?
             }
         };
@@ -1311,7 +1312,7 @@ fn plan_remote_push_action(
     else {
         return Ok(Some(RemotePushAction {
             target,
-            kind: RemotePushActionKind::CreateRemoteBranch,
+            kind: RemotePushActionKind::Create,
         }));
     };
 
@@ -1323,7 +1324,7 @@ fn plan_remote_push_action(
     if allow_force_update {
         return Ok(Some(RemotePushAction {
             target,
-            kind: RemotePushActionKind::ForceUpdateRemoteBranch,
+            kind: RemotePushActionKind::ForceUpdate,
         }));
     }
 
@@ -1332,7 +1333,7 @@ fn plan_remote_push_action(
     if git::merge_base(&remote_tracking_branch_ref, branch_name)? == remote_oid {
         return Ok(Some(RemotePushAction {
             target,
-            kind: RemotePushActionKind::UpdateRemoteBranch,
+            kind: RemotePushActionKind::Update,
         }));
     }
 
@@ -1384,12 +1385,12 @@ mod tests {
             assert_eq!(plan.actions[0].target.branch_name, "feat/auth");
             assert_eq!(
                 plan.actions[0].kind,
-                RemotePushActionKind::ForceUpdateRemoteBranch
+                RemotePushActionKind::ForceUpdate
             );
             assert_eq!(plan.actions[1].target.branch_name, "feat/auth-ui");
             assert_eq!(
                 plan.actions[1].kind,
-                RemotePushActionKind::CreateRemoteBranch
+                RemotePushActionKind::Create
             );
             assert!(
                 plan.actions
@@ -1420,7 +1421,7 @@ mod tests {
             assert_eq!(plan.actions[0].target.branch_name, "feat/auth");
             assert_eq!(
                 plan.actions[0].kind,
-                RemotePushActionKind::UpdateRemoteBranch
+                RemotePushActionKind::Update
             );
         });
     }

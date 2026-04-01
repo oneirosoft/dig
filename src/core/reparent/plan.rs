@@ -110,8 +110,8 @@ pub(crate) fn plan(options: &ReparentOptions) -> io::Result<ReparentPlan> {
     let new_parent =
         branch::resolve_parent_ref(&session.state, &session.config, parent_branch_name)?;
 
-    if let ParentRef::Branch { node_id: parent_id } = new_parent {
-        if graph.active_descendant_ids(node.id).contains(&parent_id) {
+    if let ParentRef::Branch { node_id: parent_id } = new_parent
+        && graph.active_descendant_ids(node.id).contains(&parent_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
@@ -120,7 +120,6 @@ pub(crate) fn plan(options: &ReparentOptions) -> io::Result<ReparentPlan> {
                 ),
             ));
         }
-    }
 
     let restack_plan = restack::previews_for_actions(&restack::plan_after_branch_reparent(
         &session.state,
