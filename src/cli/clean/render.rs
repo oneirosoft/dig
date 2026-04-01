@@ -72,6 +72,16 @@ impl CleanAnimation {
         render_sections(&self.sections, true)
     }
 
+    pub fn tick(&mut self) -> bool {
+        let mut changed = false;
+
+        for section in &mut self.sections {
+            changed |= tick_in_flight(&mut section.root);
+        }
+
+        changed
+    }
+
     pub fn prime_resume(
         &mut self,
         restacked_branches: &[RestackPreview],
@@ -144,6 +154,16 @@ fn clear_in_flight(node: &mut VisualNode) {
     for child in &mut node.children {
         clear_in_flight(child);
     }
+}
+
+fn tick_in_flight(node: &mut VisualNode) -> bool {
+    let mut changed = node.status.tick();
+
+    for child in &mut node.children {
+        changed |= tick_in_flight(child);
+    }
+
+    changed
 }
 
 #[cfg(test)]
@@ -305,5 +325,55 @@ mod tests {
                 "    └── \u{1b}[34m|\u{1b}[0m feat/auth-ui"
             )
         );
+    }
+
+    #[test]
+    fn tick_advances_in_flight_throbber_without_changing_progress() {
+        let mut animation = CleanAnimation::new(&CleanPlan {
+            trunk_branch: "main".into(),
+            current_branch: "feat/auth".into(),
+            requested_branch_name: Some("feat/auth".into()),
+            candidates: vec![CleanCandidate {
+                node_id: Uuid::new_v4(),
+                branch_name: "feat/auth".into(),
+                parent_branch_name: "main".into(),
+                reason: CleanReason::IntegratedIntoParent {
+                    parent_base: RestackBaseTarget::local("main"),
+                },
+                tree: CleanTreeNode {
+                    branch_name: "feat/auth".into(),
+                    children: vec![CleanTreeNode {
+                        branch_name: "feat/auth-api".into(),
+                        children: vec![],
+                    }],
+                },
+                restack_plan: vec![],
+                depth: 0,
+            }],
+            blocked: vec![],
+        });
+
+        animation.apply_event(&CleanEvent::RebaseStarted {
+            branch_name: "feat/auth-api".into(),
+            onto_branch: "main".into(),
+        });
+        animation.apply_event(&CleanEvent::RebaseProgress {
+            branch_name: "feat/auth-api".into(),
+            onto_branch: "main".into(),
+            current_commit: 2,
+            total_commits: 5,
+        });
+
+        let before = animation.render_active();
+
+        assert!(animation.tick());
+
+        let after = animation.render_active();
+
+        assert!(before.contains("\u{1b}[34m/\u{1b}[0m"));
+        assert!(after.contains("\u{1b}[34m-\u{1b}[0m"));
+        assert!(before.contains("[2/5]"));
+        assert!(after.contains("[2/5]"));
+        assert!(after.contains("feat/auth-api"));
     }
 }

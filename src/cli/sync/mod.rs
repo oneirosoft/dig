@@ -2,16 +2,22 @@ mod render;
 
 use std::io;
 use std::io::IsTerminal;
+use std::time::Duration;
 
 use clap::Args;
+use tokio::runtime::{Builder, Runtime};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::time;
 
 use crate::core::clean;
 use crate::core::merge;
+use crate::core::store::{PendingOperationKind, load_operation, open_initialized};
 use crate::core::sync::{
     self, RemotePushActionKind, RemotePushOutcome, SyncCompletion, SyncEvent, SyncOptions,
     SyncStage,
 };
-use crate::core::tree::{self, TreeOptions};
+use crate::core::tree::{self, TreeOptions, TreeView};
 
 use super::CommandOutcome;
 use super::common;
@@ -25,20 +31,17 @@ pub struct SyncArgs {
 
 pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
     let animate = io::stdout().is_terminal();
-    let mut animation = SyncAnimationSession::default();
-    let outcome = if animate {
-        sync::run_with_reporter(&args.clone().into(), &mut |event| animation.apply(event))?
+    let runtime = if animate {
+        Some(build_animation_runtime()?)
+    } else {
+        None
+    };
+    let outcome = if let Some(runtime) = runtime.as_ref() {
+        let initial_local_view = load_initial_local_sync_view(&args)?;
+        execute_sync_with_animation(runtime, args.clone(), initial_local_view)?
     } else {
         sync::run(&args.clone().into())?
     };
-
-    if animate {
-        if outcome.status.success() {
-            animation.finish_success()?;
-        } else {
-            animation.finish_failure()?;
-        }
-    }
 
     let mut final_status = outcome.status;
 
@@ -162,7 +165,12 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
                         let clean_outcome = if animate {
                             println!("Finished local sync. Moving on to cleanup.");
                             println!();
-                            execute_cleanup_with_animation(&full_outcome.cleanup_plan)?
+                            execute_cleanup_with_animation(
+                                runtime
+                                    .as_ref()
+                                    .expect("animation runtime should exist for TTY sync"),
+                                &full_outcome.cleanup_plan,
+                            )?
                         } else {
                             clean::apply(&full_outcome.cleanup_plan)?
                         };
@@ -282,10 +290,39 @@ pub fn execute(args: SyncArgs) -> io::Result<CommandOutcome> {
     })
 }
 
-#[derive(Default)]
+fn build_animation_runtime() -> io::Result<Runtime> {
+    Builder::new_current_thread().enable_time().build()
+}
+
+fn load_initial_local_sync_view(args: &SyncArgs) -> io::Result<Option<TreeView>> {
+    if !args.continue_operation {
+        return Ok(Some(tree::run(&TreeOptions::default())?.view));
+    }
+
+    let session = open_initialized("dagger is not initialized; run 'dgr init' first")?;
+    let pending_operation = load_operation(&session.paths)?;
+
+    if matches!(
+        pending_operation
+            .as_ref()
+            .map(|operation| &operation.origin),
+        Some(PendingOperationKind::Sync(_))
+    ) {
+        Ok(Some(tree::run(&TreeOptions::default())?.view))
+    } else {
+        Ok(None)
+    }
+}
+
+enum WorkerMessage<Event, Outcome> {
+    Event(Event),
+    Finished(io::Result<Outcome>),
+}
+
 struct SyncAnimationSession {
     terminal: Option<render::AnimationTerminal>,
     stage: Option<ActiveSyncStage>,
+    initial_local_view: Option<TreeView>,
 }
 
 enum ActiveSyncStage {
@@ -294,6 +331,14 @@ enum ActiveSyncStage {
 }
 
 impl SyncAnimationSession {
+    fn new(initial_local_view: Option<TreeView>) -> Self {
+        Self {
+            terminal: None,
+            stage: None,
+            initial_local_view,
+        }
+    }
+
     fn apply(&mut self, event: SyncEvent) -> io::Result<()> {
         match event {
             SyncEvent::StageStarted(SyncStage::LocalSync { .. }) => {
@@ -305,8 +350,11 @@ impl SyncAnimationSession {
                     return Ok(());
                 }
 
-                let outcome = tree::run(&TreeOptions::default())?;
-                let mut animation = render::SyncAnimation::new(&outcome.view);
+                let Some(view) = self.initial_local_view.take() else {
+                    return Ok(());
+                };
+
+                let mut animation = render::SyncAnimation::new(&view);
                 animation.apply_event(&event);
                 let mut terminal = render::AnimationTerminal::start()?;
                 terminal.render(&animation.render_active())?;
@@ -359,6 +407,23 @@ impl SyncAnimationSession {
         }
     }
 
+    fn tick(&mut self) -> io::Result<()> {
+        let Some(stage) = self.stage.as_mut() else {
+            return Ok(());
+        };
+
+        let changed = match stage {
+            ActiveSyncStage::Local(animation) => animation.tick(),
+            ActiveSyncStage::Cleanup(animation) => animation.tick(),
+        };
+
+        if changed {
+            self.render_active()?;
+        }
+
+        Ok(())
+    }
+
     fn finish_success(&mut self) -> io::Result<()> {
         let Some(mut terminal) = self.terminal.take() else {
             return Ok(());
@@ -405,18 +470,96 @@ impl SyncAnimationSession {
     }
 }
 
-fn execute_cleanup_with_animation(plan: &clean::CleanPlan) -> io::Result<clean::CleanApplyOutcome> {
-    let mut animation = super::clean::render::CleanAnimation::new(plan);
+fn execute_sync_with_animation(
+    runtime: &Runtime,
+    args: SyncArgs,
+    initial_local_view: Option<TreeView>,
+) -> io::Result<sync::SyncOutcome> {
+    runtime.block_on(execute_sync_with_animation_async(
+        args.into(),
+        initial_local_view,
+    ))
+}
+
+async fn execute_sync_with_animation_async(
+    options: SyncOptions,
+    initial_local_view: Option<TreeView>,
+) -> io::Result<sync::SyncOutcome> {
+    let (sender, mut receiver) = mpsc::channel::<WorkerMessage<SyncEvent, sync::SyncOutcome>>(64);
+    let worker = tokio::task::spawn_blocking(move || {
+        let outcome = sync::run_with_reporter(&options, &mut |event| {
+            let _ = sender.blocking_send(WorkerMessage::Event(event.clone()));
+            Ok(())
+        });
+        let _ = sender.blocking_send(WorkerMessage::Finished(outcome));
+    });
+
+    let mut animation = SyncAnimationSession::new(initial_local_view);
+    let outcome = drive_sync_animation(&mut animation, &mut receiver).await;
+    let worker_result = worker.await;
+
+    if let Err(err) = worker_result {
+        return Err(io::Error::other(err.to_string()));
+    }
+
+    let outcome = outcome?;
+    if outcome.status.success() {
+        animation.finish_success()?;
+    } else {
+        animation.finish_failure()?;
+    }
+
+    Ok(outcome)
+}
+
+async fn drive_sync_animation(
+    animation: &mut SyncAnimationSession,
+    receiver: &mut mpsc::Receiver<WorkerMessage<SyncEvent, sync::SyncOutcome>>,
+) -> io::Result<sync::SyncOutcome> {
+    loop {
+        match time::timeout(Duration::from_millis(80), receiver.recv()).await {
+            Ok(Some(WorkerMessage::Event(event))) => animation.apply(event)?,
+            Ok(Some(WorkerMessage::Finished(outcome))) => {
+                return drain_worker_messages(receiver, |event| animation.apply(event), outcome);
+            }
+            Ok(None) => return Err(io::Error::other("sync animation worker ended unexpectedly")),
+            Err(_) => animation.tick()?,
+        }
+    }
+}
+
+fn execute_cleanup_with_animation(
+    runtime: &Runtime,
+    plan: &clean::CleanPlan,
+) -> io::Result<clean::CleanApplyOutcome> {
+    runtime.block_on(execute_cleanup_with_animation_async(plan.clone()))
+}
+
+async fn execute_cleanup_with_animation_async(
+    plan: clean::CleanPlan,
+) -> io::Result<clean::CleanApplyOutcome> {
+    let mut animation = super::clean::render::CleanAnimation::new(&plan);
     let mut terminal = render::AnimationTerminal::start()?;
     terminal.render(&animation.render_active())?;
 
-    let outcome = clean::apply_with_reporter(plan, &mut |event| {
-        if animation.apply_event(&event) {
-            terminal.render(&animation.render_active())?;
-        }
+    let (sender, mut receiver) =
+        mpsc::channel::<WorkerMessage<clean::CleanEvent, clean::CleanApplyOutcome>>(64);
+    let worker = tokio::task::spawn_blocking(move || {
+        let outcome = clean::apply_with_reporter(&plan, &mut |event| {
+            let _ = sender.blocking_send(WorkerMessage::Event(event.clone()));
+            Ok(())
+        });
+        let _ = sender.blocking_send(WorkerMessage::Finished(outcome));
+    });
 
-        Ok(())
-    })?;
+    let outcome = drive_cleanup_animation(&mut terminal, &mut animation, &mut receiver).await;
+    let worker_result = worker.await;
+
+    if let Err(err) = worker_result {
+        return Err(io::Error::other(err.to_string()));
+    }
+
+    let outcome = outcome?;
 
     if outcome.status.success() {
         terminal.finish(&animation.render_final())?;
@@ -430,6 +573,59 @@ fn execute_cleanup_with_animation(plan: &clean::CleanPlan) -> io::Result<clean::
     }
 
     Ok(outcome)
+}
+
+async fn drive_cleanup_animation(
+    terminal: &mut render::AnimationTerminal,
+    animation: &mut super::clean::render::CleanAnimation,
+    receiver: &mut mpsc::Receiver<WorkerMessage<clean::CleanEvent, clean::CleanApplyOutcome>>,
+) -> io::Result<clean::CleanApplyOutcome> {
+    loop {
+        match time::timeout(Duration::from_millis(80), receiver.recv()).await {
+            Ok(Some(WorkerMessage::Event(event))) => {
+                if animation.apply_event(&event) {
+                    terminal.render(&animation.render_active())?;
+                }
+            }
+            Ok(Some(WorkerMessage::Finished(outcome))) => {
+                return drain_worker_messages(
+                    receiver,
+                    |event| {
+                        if animation.apply_event(&event) {
+                            terminal.render(&animation.render_active())?;
+                        }
+
+                        Ok(())
+                    },
+                    outcome,
+                );
+            }
+            Ok(None) => {
+                return Err(io::Error::other(
+                    "cleanup animation worker ended unexpectedly",
+                ));
+            }
+            Err(_) => {
+                if animation.tick() {
+                    terminal.render(&animation.render_active())?;
+                }
+            }
+        }
+    }
+}
+
+fn drain_worker_messages<Event, Outcome>(
+    receiver: &mut mpsc::Receiver<WorkerMessage<Event, Outcome>>,
+    mut apply_event: impl FnMut(Event) -> io::Result<()>,
+    mut outcome: io::Result<Outcome>,
+) -> io::Result<Outcome> {
+    loop {
+        match receiver.try_recv() {
+            Ok(WorkerMessage::Event(event)) => apply_event(event)?,
+            Ok(WorkerMessage::Finished(next_outcome)) => outcome = next_outcome,
+            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => return outcome,
+        }
+    }
 }
 
 impl From<SyncArgs> for SyncOptions {

@@ -135,6 +135,15 @@ impl BranchStatus {
             total_commits: Some(total_commits),
         }
     }
+
+    pub fn tick(&mut self) -> bool {
+        let Self::InFlight { frame_index, .. } = self else {
+            return false;
+        };
+
+        *frame_index = (*frame_index + 1) % markers::THROBBER_FRAMES.len();
+        true
+    }
 }
 
 pub fn render_sections(sections: &[OperationSection], final_view: bool) -> String {

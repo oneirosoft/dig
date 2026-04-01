@@ -180,13 +180,46 @@ pub fn rebase_onto_with_progress<F>(
     new_base: &str,
     old_upstream: &str,
     branch_name: &str,
+    on_progress: F,
+) -> io::Result<GitCommandOutput>
+where
+    F: FnMut(RebaseProgress) -> io::Result<()>,
+{
+    run_rebase_with_progress(
+        Command::new("git").args(["rebase", "--onto", new_base, old_upstream, branch_name]),
+        on_progress,
+    )
+}
+
+pub fn continue_rebase_with_progress<F>(on_progress: F) -> io::Result<GitCommandOutput>
+where
+    F: FnMut(RebaseProgress) -> io::Result<()>,
+{
+    run_rebase_with_progress(
+        Command::new("git")
+            .env("GIT_EDITOR", "true")
+            .args(["rebase", "--continue"]),
+        on_progress,
+    )
+}
+
+pub fn continue_rebase() -> io::Result<GitCommandOutput> {
+    let output = Command::new("git")
+        .env("GIT_EDITOR", "true")
+        .args(["rebase", "--continue"])
+        .output()?;
+
+    output_to_git_command_output(output)
+}
+
+fn run_rebase_with_progress<F>(
+    command: &mut Command,
     mut on_progress: F,
 ) -> io::Result<GitCommandOutput>
 where
     F: FnMut(RebaseProgress) -> io::Result<()>,
 {
-    let mut child = Command::new("git")
-        .args(["rebase", "--onto", new_base, old_upstream, branch_name])
+    let mut child = command
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -223,15 +256,6 @@ where
         stdout: String::new(),
         stderr: stderr_output,
     })
-}
-
-pub fn continue_rebase() -> io::Result<GitCommandOutput> {
-    let output = Command::new("git")
-        .env("GIT_EDITOR", "true")
-        .args(["rebase", "--continue"])
-        .output()?;
-
-    output_to_git_command_output(output)
 }
 
 pub fn init_repository() -> io::Result<ExitStatus> {
@@ -656,8 +680,23 @@ mod tests {
     };
     use std::env;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::path::Path;
     use std::path::PathBuf;
+    #[cfg(unix)]
+    use std::process::Command;
     use uuid::Uuid;
+
+    #[cfg(unix)]
+    fn write_executable(path: &Path, script: &str) {
+        fs::write(path, script).unwrap();
+
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
 
     #[test]
     fn reports_in_progress_rebase_state() {
@@ -710,6 +749,47 @@ mod tests {
                 total: 7,
             })
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parses_continue_rebase_progress_from_streamed_git_output() {
+        let temp_dir = env::temp_dir().join(format!("dgr-git-{}", Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let git_path = temp_dir.join("git");
+        write_executable(
+            &git_path,
+            "#!/bin/sh\nprintf 'Rebasing (1/3)\\r' >&2\nsleep 0.1\nprintf 'Rebasing (2/3)\\r' >&2\nsleep 0.1\nprintf 'Rebasing (2/3)\\rSuccessfully rebased\\n' >&2\nexit 0\n",
+        );
+
+        let mut seen = Vec::new();
+        let output = super::run_rebase_with_progress(
+            Command::new(&git_path).args(["rebase", "--continue"]),
+            |progress| {
+                seen.push(progress);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(
+            seen,
+            vec![
+                RebaseProgress {
+                    current: 1,
+                    total: 3,
+                },
+                RebaseProgress {
+                    current: 2,
+                    total: 3,
+                },
+            ]
+        );
+        assert!(output.stderr.contains("Successfully rebased"));
+
+        fs::remove_dir_all(temp_dir).unwrap();
     }
 
     #[test]

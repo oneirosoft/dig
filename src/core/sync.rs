@@ -201,18 +201,13 @@ where
         )));
     }
 
-    let continue_output = git::continue_rebase()?;
-    if !continue_output.status.success() {
-        return Ok(SyncOutcome {
-            status: continue_output.status,
-            completion: None,
-            failure_output: Some(continue_output.combined_output()),
-            paused: true,
-        });
-    }
-
     match pending_operation.origin.clone() {
-        crate::core::store::PendingOperationKind::Commit(payload) => {
+        PendingOperationKind::Commit(payload) => {
+            let continue_output = git::continue_rebase()?;
+            if !continue_output.status.success() {
+                return Ok(paused_continue_outcome(continue_output));
+            }
+
             let outcome = commit::resume_after_sync(pending_operation, payload)?;
             let status = outcome.status;
             let failure_output = outcome.failure_output.clone();
@@ -224,7 +219,12 @@ where
                 paused,
             })
         }
-        crate::core::store::PendingOperationKind::Adopt(payload) => {
+        PendingOperationKind::Adopt(payload) => {
+            let continue_output = git::continue_rebase()?;
+            if !continue_output.status.success() {
+                return Ok(paused_continue_outcome(continue_output));
+            }
+
             let outcome = adopt::resume_after_sync(pending_operation, payload)?;
             let status = outcome.status;
             let failure_output = outcome.failure_output.clone();
@@ -236,7 +236,12 @@ where
                 paused,
             })
         }
-        crate::core::store::PendingOperationKind::Merge(payload) => {
+        PendingOperationKind::Merge(payload) => {
+            let continue_output = git::continue_rebase()?;
+            if !continue_output.status.success() {
+                return Ok(paused_continue_outcome(continue_output));
+            }
+
             let outcome = merge::resume_after_sync(pending_operation, payload)?;
             let status = outcome.outcome.status;
             let failure_output = outcome.outcome.failure_output.clone();
@@ -248,16 +253,24 @@ where
                 paused,
             })
         }
-        crate::core::store::PendingOperationKind::Clean(payload) => {
+        PendingOperationKind::Clean(payload) => {
             let mut restacked_branches = payload.restacked_branches.clone();
             restacked_branches.extend(pending_operation.completed_branches().iter().cloned());
+            let active_action = pending_operation.active_action().clone();
             reporter(SyncEvent::StageStarted(SyncStage::CleanupResume {
                 plan: clean::plan_for_resume(&payload)?,
-                active_branch_name: pending_operation.active_action().branch_name.clone(),
+                active_branch_name: active_action.branch_name.clone(),
                 untracked_branches: payload.untracked_branches.clone(),
                 deleted_branches: payload.deleted_branches.clone(),
                 restacked_branches,
             }))?;
+            let continue_output = git::continue_rebase_with_progress(|progress| {
+                report_cleanup_continue_progress(reporter, &active_action, progress)
+            })?;
+            if !continue_output.status.success() {
+                return Ok(paused_continue_outcome(continue_output));
+            }
+
             let trunk_branch = payload.trunk_branch.clone();
             let outcome =
                 clean::resume_after_sync_with_reporter(pending_operation, payload, &mut |event| {
@@ -276,7 +289,12 @@ where
                 paused,
             })
         }
-        crate::core::store::PendingOperationKind::Orphan(payload) => {
+        PendingOperationKind::Orphan(payload) => {
+            let continue_output = git::continue_rebase()?;
+            if !continue_output.status.success() {
+                return Ok(paused_continue_outcome(continue_output));
+            }
+
             let outcome = orphan::resume_after_sync(pending_operation, payload)?;
             let status = outcome.status;
             let failure_output = outcome.failure_output.clone();
@@ -288,7 +306,12 @@ where
                 paused,
             })
         }
-        crate::core::store::PendingOperationKind::Reparent(payload) => {
+        PendingOperationKind::Reparent(payload) => {
+            let continue_output = git::continue_rebase()?;
+            if !continue_output.status.success() {
+                return Ok(paused_continue_outcome(continue_output));
+            }
+
             let outcome = reparent::resume_after_sync(pending_operation, payload)?;
             let status = outcome.status;
             let failure_output = outcome.failure_output.clone();
@@ -300,10 +323,29 @@ where
                 paused,
             })
         }
-        crate::core::store::PendingOperationKind::Sync(payload) => {
-            let outcome = resume_full_sync_with_reporter(pending_operation, payload, reporter)?;
+        PendingOperationKind::Sync(payload) => {
+            let active_action = pending_operation.active_action().clone();
+            report_resumed_full_sync_stage_started(reporter, &pending_operation, &payload)?;
+            let continue_output = git::continue_rebase_with_progress(|progress| {
+                report_sync_continue_progress(reporter, &active_action, progress)
+            })?;
+            if !continue_output.status.success() {
+                return Ok(paused_continue_outcome(continue_output));
+            }
+
+            let outcome =
+                resume_full_sync_with_reporter(pending_operation, payload, reporter, false)?;
             finalize_full_sync_outcome(outcome)
         }
+    }
+}
+
+fn paused_continue_outcome(continue_output: git::GitCommandOutput) -> SyncOutcome {
+    SyncOutcome {
+        status: continue_output.status,
+        completion: None,
+        failure_output: Some(continue_output.combined_output()),
+        paused: true,
     }
 }
 
@@ -343,27 +385,22 @@ fn resume_full_sync_with_reporter<F>(
     pending_operation: PendingOperationState,
     payload: PendingSyncOperation,
     reporter: &mut F,
+    emit_stage_started: bool,
 ) -> io::Result<LocalSyncOutcome>
 where
     F: FnMut(SyncEvent) -> io::Result<()>,
 {
     let mut session = open_initialized("dagger is not initialized; run 'dgr init' first")?;
     clean::reconcile_branch_divergence_state(&mut session)?;
+    if emit_stage_started {
+        report_resumed_full_sync_stage_started(reporter, &pending_operation, &payload)?;
+    }
+
     let mut progress = LocalSyncProgress {
         repaired_pull_requests: Vec::new(),
         deleted_branches: payload.deleted_branches,
         restacked_branches: payload.restacked_branches,
     };
-    let mut resumed_restacked_branches = progress.restacked_branches.clone();
-    resumed_restacked_branches.extend(pending_operation.completed_branches().iter().cloned());
-
-    reporter(SyncEvent::StageStarted(SyncStage::LocalSync {
-        phase: payload.phase,
-        step_branch_name: payload.step_branch_name.clone(),
-        active_branch_name: pending_operation.active_action().branch_name.clone(),
-        deleted_branches: progress.deleted_branches.clone(),
-        restacked_branches: resumed_restacked_branches,
-    }))?;
 
     let restack_outcome = workflow::continue_resumable_restack_operation(
         &mut session,
@@ -393,6 +430,58 @@ where
         payload.remote_sync_enabled,
         reporter,
     )
+}
+
+fn report_resumed_full_sync_stage_started<F>(
+    reporter: &mut F,
+    pending_operation: &PendingOperationState,
+    payload: &PendingSyncOperation,
+) -> io::Result<()>
+where
+    F: FnMut(SyncEvent) -> io::Result<()>,
+{
+    let mut resumed_restacked_branches = payload.restacked_branches.clone();
+    resumed_restacked_branches.extend(pending_operation.completed_branches().iter().cloned());
+
+    reporter(SyncEvent::StageStarted(SyncStage::LocalSync {
+        phase: payload.phase,
+        step_branch_name: payload.step_branch_name.clone(),
+        active_branch_name: pending_operation.active_action().branch_name.clone(),
+        deleted_branches: payload.deleted_branches.clone(),
+        restacked_branches: resumed_restacked_branches,
+    }))
+}
+
+fn report_sync_continue_progress<F>(
+    reporter: &mut F,
+    action: &RestackAction,
+    progress: git::RebaseProgress,
+) -> io::Result<()>
+where
+    F: FnMut(SyncEvent) -> io::Result<()>,
+{
+    reporter(SyncEvent::RestackProgress {
+        branch_name: action.branch_name.clone(),
+        onto_branch: action.new_base.branch_name.clone(),
+        current_commit: progress.current,
+        total_commits: progress.total,
+    })
+}
+
+fn report_cleanup_continue_progress<F>(
+    reporter: &mut F,
+    action: &RestackAction,
+    progress: git::RebaseProgress,
+) -> io::Result<()>
+where
+    F: FnMut(SyncEvent) -> io::Result<()>,
+{
+    reporter(SyncEvent::Cleanup(clean::CleanEvent::RebaseProgress {
+        branch_name: action.branch_name.clone(),
+        onto_branch: action.new_base.branch_name.clone(),
+        current_commit: progress.current,
+        total_commits: progress.total,
+    }))
 }
 
 fn finalize_full_sync_outcome(outcome: LocalSyncOutcome) -> io::Result<SyncOutcome> {

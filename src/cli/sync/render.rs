@@ -87,6 +87,16 @@ impl SyncAnimation {
         )
     }
 
+    pub fn tick(&mut self) -> bool {
+        let mut changed = false;
+
+        for root in &mut self.roots {
+            changed |= tick_in_flight(root);
+        }
+
+        changed
+    }
+
     fn prime_resume(
         &mut self,
         restacked_branches: &[RestackPreview],
@@ -199,6 +209,15 @@ impl SyncBranchStatus {
             total_commits: Some(total_commits),
         }
     }
+
+    fn tick(&mut self) -> bool {
+        let Self::InFlight { frame_index, .. } = self else {
+            return false;
+        };
+
+        *frame_index = (*frame_index + 1) % markers::THROBBER_FRAMES.len();
+        true
+    }
 }
 
 fn visual_node_from_tree(node: &TreeNode) -> VisualTreeNode {
@@ -218,6 +237,16 @@ fn clear_in_flight(node: &mut VisualTreeNode) {
     for child in &mut node.children {
         clear_in_flight(child);
     }
+}
+
+fn tick_in_flight(node: &mut VisualTreeNode) -> bool {
+    let mut changed = node.status.tick();
+
+    for child in &mut node.children {
+        changed |= tick_in_flight(child);
+    }
+
+    changed
 }
 
 fn prune_final_nodes(nodes: &[VisualTreeNode]) -> Vec<VisualTreeNode> {
@@ -442,5 +471,36 @@ mod tests {
                 "    └── \u{1b}[32m✓\u{1b}[0m \u{1b}[32mfeat/auth-ui\u{1b}[0m"
             )
         );
+    }
+
+    #[test]
+    fn tick_advances_in_flight_throbber_without_changing_progress() {
+        let mut animation = SyncAnimation::new(&sample_view());
+
+        animation.apply_event(&SyncEvent::StageStarted(SyncStage::LocalSync {
+            phase: PendingSyncPhase::RestackOutdatedLocalStacks,
+            step_branch_name: "feat/auth".into(),
+            active_branch_name: "feat/auth-api".into(),
+            deleted_branches: Vec::new(),
+            restacked_branches: Vec::new(),
+        }));
+        animation.apply_event(&SyncEvent::RestackProgress {
+            branch_name: "feat/auth-api".into(),
+            onto_branch: "feat/auth".into(),
+            current_commit: 2,
+            total_commits: 5,
+        });
+
+        let before = animation.render_active();
+
+        assert!(animation.tick());
+
+        let after = animation.render_active();
+
+        assert!(before.contains("\u{1b}[38;5;208m/\u{1b}[0m"));
+        assert!(after.contains("\u{1b}[38;5;208m-\u{1b}[0m"));
+        assert!(before.contains("[2/5]"));
+        assert!(after.contains("[2/5]"));
+        assert!(after.contains("\u{1b}[38;5;208mfeat/auth-api\u{1b}[0m"));
     }
 }
