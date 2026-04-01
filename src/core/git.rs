@@ -209,10 +209,11 @@ where
         stderr_output.push_str(&text);
 
         if let Some(progress) = parse_latest_rebase_progress(&stderr_output)
-            && last_progress != Some(progress) {
-                on_progress(progress)?;
-                last_progress = Some(progress);
-            }
+            && last_progress != Some(progress)
+        {
+            on_progress(progress)?;
+            last_progress = Some(progress);
+        }
     }
 
     let status = child.wait()?;

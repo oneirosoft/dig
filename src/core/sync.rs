@@ -1383,15 +1383,9 @@ mod tests {
 
             assert_eq!(plan.actions.len(), 2);
             assert_eq!(plan.actions[0].target.branch_name, "feat/auth");
-            assert_eq!(
-                plan.actions[0].kind,
-                RemotePushActionKind::ForceUpdate
-            );
+            assert_eq!(plan.actions[0].kind, RemotePushActionKind::ForceUpdate);
             assert_eq!(plan.actions[1].target.branch_name, "feat/auth-ui");
-            assert_eq!(
-                plan.actions[1].kind,
-                RemotePushActionKind::Create
-            );
+            assert_eq!(plan.actions[1].kind, RemotePushActionKind::Create);
             assert!(
                 plan.actions
                     .iter()
@@ -1419,10 +1413,7 @@ mod tests {
 
             assert_eq!(plan.actions.len(), 1);
             assert_eq!(plan.actions[0].target.branch_name, "feat/auth");
-            assert_eq!(
-                plan.actions[0].kind,
-                RemotePushActionKind::Update
-            );
+            assert_eq!(plan.actions[0].kind, RemotePushActionKind::Update);
         });
     }
 
