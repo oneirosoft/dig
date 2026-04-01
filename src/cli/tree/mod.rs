@@ -1,4 +1,5 @@
 mod render;
+mod rows;
 
 use std::io;
 
@@ -9,6 +10,7 @@ use crate::core::tree::{self, TreeOptions};
 use super::CommandOutcome;
 
 pub(super) use render::{render_branch_lineage, render_stack_tree};
+pub(super) use rows::{StackTreeRow, stack_tree_rows};
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct TreeArgs {

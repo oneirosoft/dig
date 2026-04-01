@@ -99,6 +99,8 @@ dgr pr list --view
 dgr init                        # initialize dagger in the current directory
 dgr branch <name>               # create a tracked branch from the current branch
 dgr branch <name> -p <parent>   # create a tracked branch under a specific parent
+dgr switch <branch>             # switch directly to a local branch
+dgr switch                      # choose a tracked branch from the interactive tree
 dgr tree                        # show the full tracked branch tree
 dgr tree --branch <branch>      # show one branch and its descendants
 dgr commit -m "message"         # commit and restack tracked descendants if needed
@@ -116,6 +118,8 @@ dgr reparent -p <parent>        # reparent the current tracked branch onto a new
 dgr reparent <branch> -p <parent> # reparent a named tracked branch onto a new parent
 dgr orphan <branch>             # stop tracking a branch but keep the local branch
 ```
+
+When you run `dgr switch` without a branch name, dagger opens an inline tree picker for the tracked stack. Use the arrow keys or `j`/`k` to move, `Enter` to switch, and `Esc` or `q` to cancel.
 
 ### Sync stacks
 

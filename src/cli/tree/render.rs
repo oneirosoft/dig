@@ -1,8 +1,9 @@
-use crate::cli::common;
 use crate::core::graph::BranchLineageNode;
-use crate::core::tree::{TreeLabel, TreeView};
+use crate::core::tree::TreeView;
 use crate::ui::markers;
 use crate::ui::palette::Accent;
+
+use super::rows::stack_tree_rows;
 
 pub fn render_branch_lineage(lineage: &[BranchLineageNode]) -> String {
     let mut lines = Vec::new();
@@ -19,12 +20,11 @@ pub fn render_branch_lineage(lineage: &[BranchLineageNode]) -> String {
 }
 
 pub fn render_stack_tree(view: &TreeView) -> String {
-    let mut rendered = common::render_tree(
-        view.root_label.as_ref().map(format_tree_label),
-        &view.roots,
-        &|node| format_branch_label(&node.branch_name, node.is_current, node.pull_request_number),
-        &|node| node.children.as_slice(),
-    );
+    let mut rendered = stack_tree_rows(view)
+        .into_iter()
+        .map(|row| row.line)
+        .collect::<Vec<_>>()
+        .join("\n");
 
     if !view.is_current_visible {
         if let Some(current_branch) = &view.current_branch_name {
@@ -43,14 +43,6 @@ pub fn render_stack_tree(view: &TreeView) -> String {
     }
 
     rendered
-}
-
-fn format_tree_label(root_label: &TreeLabel) -> String {
-    format_branch_label(
-        &root_label.branch_name,
-        root_label.is_current,
-        root_label.pull_request_number,
-    )
 }
 
 fn format_branch_text(branch_name: &str, pull_request_number: Option<u64>) -> String {
@@ -79,17 +71,7 @@ fn format_branch_label(
 }
 
 fn format_lineage_branch(branch: &BranchLineageNode, is_current: bool) -> String {
-    let label = format_branch_text(&branch.branch_name, branch.pull_request_number);
-
-    if is_current {
-        format!(
-            "{} {}",
-            Accent::BranchRef.paint_ansi(markers::CURRENT_BRANCH),
-            Accent::BranchRef.paint_ansi(&label)
-        )
-    } else {
-        format!("{} {}", markers::NON_CURRENT_BRANCH, label)
-    }
+    format_branch_label(&branch.branch_name, is_current, branch.pull_request_number)
 }
 
 #[cfg(test)]

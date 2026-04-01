@@ -13,6 +13,7 @@ pub(crate) mod pr;
 pub(crate) mod reparent;
 pub(crate) mod restack;
 pub(crate) mod store;
+pub(crate) mod switch;
 pub(crate) mod sync;
 #[cfg(test)]
 pub(crate) mod test_support;

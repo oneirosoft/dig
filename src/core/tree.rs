@@ -45,28 +45,26 @@ pub struct TreeOutcome {
 
 pub fn run(options: &TreeOptions) -> io::Result<TreeOutcome> {
     let status = git::probe_repo_status()?;
-    let session = open_initialized("dagger is not initialized")?;
-    let current_branch = git::current_branch_name_if_any()?;
-    let view = build_tree_view(
-        &session.state,
-        &session.config.trunk_branch,
-        current_branch.as_deref(),
-    );
+    let view = full_view("dagger is not initialized")?;
     let view = filter_tree_view(view, options.branch_name.as_deref())?;
 
     Ok(TreeOutcome { status, view })
 }
 
 pub(crate) fn focused_context_view(branch_name: &str) -> io::Result<TreeView> {
-    let session = open_initialized("dagger is not initialized")?;
+    let view = full_view("dagger is not initialized")?;
+
+    focus_tree_view(view, branch_name)
+}
+
+pub(crate) fn full_view(missing_message: &str) -> io::Result<TreeView> {
+    let session = open_initialized(missing_message)?;
     let current_branch = git::current_branch_name_if_any()?;
-    let view = build_tree_view(
+    Ok(build_tree_view(
         &session.state,
         &session.config.trunk_branch,
         current_branch.as_deref(),
-    );
-
-    focus_tree_view(view, branch_name)
+    ))
 }
 
 fn build_tree_view(
