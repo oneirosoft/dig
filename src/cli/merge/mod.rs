@@ -236,7 +236,21 @@ mod tests {
     use super::{MergeArgs, format_merge_plan, format_merge_success_output};
     use crate::core::merge::{MergeMode, MergeOptions, MergePlan, MergeTreeNode};
     use crate::core::restack::RestackPreview;
+    use std::process::ExitStatus;
     use uuid::Uuid;
+
+    fn exit_status_success() -> ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            ExitStatus::from_raw(0)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            ExitStatus::from_raw(0)
+        }
+    }
 
     #[test]
     fn converts_cli_args_into_core_merge_options() {
@@ -307,7 +321,7 @@ mod tests {
                 restack_plan: vec![],
             },
             &crate::core::merge::MergeOutcome {
-                status: std::os::unix::process::ExitStatusExt::from_raw(0),
+                status: exit_status_success(),
                 switched_to_target_from: Some("feat/auth-api".into()),
                 restacked_branches: vec![RestackPreview {
                     branch_name: "feat/auth-api-tests".into(),
