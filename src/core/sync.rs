@@ -1849,10 +1849,7 @@ mod tests {
                 log_path.display()
             );
             #[cfg(windows)]
-            let script = format!(
-                "@echo off\r\necho %* >> \"{}\"\r\n",
-                log_path.display()
-            );
+            let script = format!("@echo off\r\necho %* >> \"{}\"\r\n", log_path.display());
             install_fake_executable(&bin_dir, "gh", &script);
             fs::write(&log_path, "").unwrap();
             let _path_guard = EnvVarGuard::set("PATH", path_with_prepend(&bin_dir));
