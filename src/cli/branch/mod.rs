@@ -19,12 +19,12 @@ pub struct BranchArgs {
 pub fn execute(args: BranchArgs) -> io::Result<CommandOutcome> {
     let outcome = branch::run(&args.clone().into())?;
 
-    if outcome.status.success() {
-        if let Some(node) = &outcome.created_node {
-            println!("Created and switched to '{}'.", node.branch_name);
-            println!();
-            println!("{}", super::tree::render_branch_lineage(&outcome.lineage));
-        }
+    if outcome.status.success()
+        && let Some(node) = &outcome.created_node
+    {
+        println!("Created and switched to '{}'.", node.branch_name);
+        println!();
+        println!("{}", super::tree::render_branch_lineage(&outcome.lineage));
     }
 
     Ok(CommandOutcome {

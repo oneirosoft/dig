@@ -358,9 +358,9 @@ fn format_status_text(status: &SyncStatus) -> String {
         } => format!(
             "{} {branch_name} on {remote_name}",
             match kind {
-                RemotePushActionKind::CreateRemoteBranch => "Creating remote branch",
-                RemotePushActionKind::UpdateRemoteBranch => "Pushing",
-                RemotePushActionKind::ForceUpdateRemoteBranch => "Force-pushing",
+                RemotePushActionKind::Create => "Creating remote branch",
+                RemotePushActionKind::Update => "Pushing",
+                RemotePushActionKind::ForceUpdate => "Force-pushing",
             }
         ),
         SyncStatus::DeletingBranch { branch_name } => format!("Deleting {branch_name}"),

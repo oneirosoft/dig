@@ -26,20 +26,20 @@ pub fn render_stack_tree(view: &TreeView) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
-    if !view.is_current_visible {
-        if let Some(current_branch) = &view.current_branch_name {
-            let label = match &view.current_branch_suffix {
-                Some(suffix) => format!("{current_branch} {suffix}"),
-                None => current_branch.clone(),
-            };
+    if !view.is_current_visible
+        && let Some(current_branch) = &view.current_branch_name
+    {
+        let label = match &view.current_branch_suffix {
+            Some(suffix) => format!("{current_branch} {suffix}"),
+            None => current_branch.clone(),
+        };
 
-            rendered.push_str("\n\n");
-            rendered.push_str(&format!(
-                "{} {}",
-                Accent::BranchRef.paint_ansi(markers::CURRENT_BRANCH),
-                Accent::BranchRef.paint_ansi(&label)
-            ));
-        }
+        rendered.push_str("\n\n");
+        rendered.push_str(&format!(
+            "{} {}",
+            Accent::BranchRef.paint_ansi(markers::CURRENT_BRANCH),
+            Accent::BranchRef.paint_ansi(&label)
+        ));
     }
 
     rendered

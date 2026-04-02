@@ -196,11 +196,11 @@ fn parse_git_log_output(stdout: &str) -> Vec<CommitEntry> {
 fn parse_commit_metadata(remainder: &str) -> (bool, Vec<String>, String) {
     let trimmed = remainder.trim_start();
 
-    if let Some(decorated) = trimmed.strip_prefix('(') {
-        if let Some((decorations, title)) = decorated.split_once(") ") {
-            let (is_head, refs) = parse_decorations(decorations);
-            return (is_head, refs, title.to_string());
-        }
+    if let Some(decorated) = trimmed.strip_prefix('(')
+        && let Some((decorations, title)) = decorated.split_once(") ")
+    {
+        let (is_head, refs) = parse_decorations(decorations);
+        return (is_head, refs, title.to_string());
     }
 
     (false, Vec::new(), trimmed.to_string())

@@ -42,9 +42,34 @@ jobs:
             exit 1
           fi
 
+  test:
+    name: Test
+    needs: verify_tag_on_main
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run cargo test
+        run: cargo test --locked --release
+
   build:
     name: Build ${{ matrix.target }}
-    needs: verify_tag_on_main
+    needs: [verify_tag_on_main, test]
     runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false

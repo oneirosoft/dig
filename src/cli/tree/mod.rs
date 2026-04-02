@@ -43,10 +43,10 @@ pub(super) fn render_focused_context_tree(
 ) -> io::Result<String> {
     let mut view = tree::focused_context_view(branch_name)?;
 
-    if let Some((current_branch_name, suffix)) = suffix_for_current_branch {
-        if view.current_branch_name.as_deref() == Some(current_branch_name) {
-            view.current_branch_suffix = Some(suffix.to_string());
-        }
+    if let Some((current_branch_name, suffix)) = suffix_for_current_branch
+        && view.current_branch_name.as_deref() == Some(current_branch_name)
+    {
+        view.current_branch_suffix = Some(suffix.to_string());
     }
 
     Ok(render::render_stack_tree(&view))
