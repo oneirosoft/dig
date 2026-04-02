@@ -76,10 +76,7 @@ impl DaggerState {
                 if *parent_id == node.id {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!(
-                            "branch '{}' references itself as parent",
-                            node.branch_name
-                        ),
+                        format!("branch '{}' references itself as parent", node.branch_name),
                     ));
                 }
                 if !all_ids.contains(parent_id) {
@@ -492,10 +489,11 @@ pub fn now_unix_timestamp_secs() -> u64 {
 mod tests {
     use super::{
         BranchAdoptedEvent, BranchArchiveReason, BranchArchivedEvent, BranchDivergenceState,
-        BranchNode, BranchPullRequestTrackedEvent, BranchPullRequestTrackedSource, DaggerConfig,
-        DaggerEvent, DaggerState, ParentRef, PendingCommitOperation, PendingOperationKind,
-        PendingOperationState, PendingOrphanOperation, PendingReparentOperation,
-        PendingSyncOperation, PendingSyncPhase, TrackedPullRequest, DAGGER_STATE_VERSION,
+        BranchNode, BranchPullRequestTrackedEvent, BranchPullRequestTrackedSource,
+        DAGGER_STATE_VERSION, DaggerConfig, DaggerEvent, DaggerState, ParentRef,
+        PendingCommitOperation, PendingOperationKind, PendingOperationState,
+        PendingOrphanOperation, PendingReparentOperation, PendingSyncOperation, PendingSyncPhase,
+        TrackedPullRequest,
     };
     use crate::core::restack::{RestackAction, RestackBaseTarget};
     use uuid::Uuid;
@@ -811,7 +809,12 @@ mod tests {
     #[test]
     fn validates_dangling_parent_reference() {
         let dangling_id = Uuid::new_v4();
-        let node = make_node("feature/orphan", ParentRef::Branch { node_id: dangling_id });
+        let node = make_node(
+            "feature/orphan",
+            ParentRef::Branch {
+                node_id: dangling_id,
+            },
+        );
 
         let state = DaggerState {
             version: DAGGER_STATE_VERSION,
