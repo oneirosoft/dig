@@ -10,14 +10,27 @@ use support::{
     path_with_prepend, strip_ansi, with_temp_repo,
 };
 
-fn install_fake_gh(repo: &Path, script: &str) -> (PathBuf, String, String) {
+fn install_fake_gh(
+    repo: &Path,
+    unix_script: &str,
+    windows_script: &str,
+) -> (PathBuf, String, String, String) {
     let bin_dir = repo.join("fake-bin");
+    let script = if cfg!(windows) {
+        windows_script
+    } else {
+        unix_script
+    };
     install_fake_executable(&bin_dir, "gh", script);
 
     let path = path_with_prepend(&bin_dir);
     let log_path = repo.join("gh.log").display().to_string();
+    let gh_bin = bin_dir
+        .join(if cfg!(windows) { "gh.cmd" } else { "gh" })
+        .display()
+        .to_string();
 
-    (bin_dir, path, log_path)
+    (bin_dir, path, log_path, gh_bin)
 }
 
 fn clear_log(path: &str) {
@@ -51,7 +64,7 @@ fn pr_creates_root_pull_request_tracks_number_and_updates_tree() {
         dgr_ok(repo, &["init"]);
         dgr_ok(repo, &["branch", "feat/auth"]);
 
-        let (_, path, log_path) = install_fake_gh(
+        let (_, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -66,6 +79,19 @@ if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
 fi
 echo "unexpected gh args: $*" >&2
 exit 1
+"#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="list" (
+  echo []
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="create" (
+  echo https://github.com/oneirosoft/dagger/pull/123
+  exit /b 0
+)
+echo unexpected gh args: %* 1>&2
+exit /b 1
 "#,
         );
 
@@ -82,6 +108,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
@@ -131,7 +158,7 @@ fn pr_merge_retargets_open_child_pull_request_before_merging_parent() {
         track_pull_request_number(repo, "feat/auth-ui", 124);
         git_ok(repo, &["checkout", "feat/auth"]);
 
-        let (_, path, log_path) = install_fake_gh(
+        let (_, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -149,6 +176,21 @@ fi
 echo "unexpected gh args: $*" >&2
 exit 1
 "#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="view" if "%3"=="124" (
+  echo {"number":124,"state":"OPEN","mergedAt":null,"baseRefName":"feat/auth","headRefName":"feat/auth-ui","headRefOid":"abc123","isDraft":false,"url":"https://github.com/oneirosoft/dagger/pull/124"}
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="edit" if "%3"=="124" if "%4"=="--base" if "%5"=="main" (
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="merge" if "%3"=="123" if "%4"=="--squash" if "%5"=="--delete-branch" (
+  exit /b 0
+)
+echo unexpected gh args: %* 1>&2
+exit /b 1
+"#,
         );
 
         let output = dgr_ok_with_env(
@@ -157,6 +199,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
@@ -186,7 +229,7 @@ fn pr_creates_child_pull_request_against_tracked_parent() {
         dgr_ok(repo, &["branch", "feat/auth"]);
         dgr_ok(repo, &["branch", "feat/auth-api"]);
 
-        let (_, path, log_path) = install_fake_gh(
+        let (_, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -201,6 +244,18 @@ if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
 fi
 exit 1
 "#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="list" (
+  echo []
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="create" (
+  echo https://github.com/oneirosoft/dagger/pull/234
+  exit /b 0
+)
+exit /b 1
+"#,
         );
 
         let output = dgr_ok_with_env(
@@ -209,6 +264,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
@@ -233,7 +289,7 @@ fn pr_defaults_body_to_title_when_body_is_omitted() {
         dgr_ok(repo, &["init"]);
         dgr_ok(repo, &["branch", "feat/auth"]);
 
-        let (_, path, log_path) = install_fake_gh(
+        let (_, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -249,6 +305,19 @@ fi
 echo "unexpected gh args: $*" >&2
 exit 1
 "#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="list" (
+  echo []
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="create" (
+  echo https://github.com/oneirosoft/dagger/pull/321
+  exit /b 0
+)
+echo unexpected gh args: %* 1>&2
+exit /b 1
+"#,
         );
 
         let output = dgr_ok_with_env(
@@ -257,6 +326,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
@@ -283,7 +353,7 @@ fn pr_adopts_matching_open_pull_request_without_creating_another() {
         dgr_ok(repo, &["init"]);
         dgr_ok(repo, &["branch", "feat/auth"]);
 
-        let (_, path, log_path) = install_fake_gh(
+        let (_, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -295,6 +365,15 @@ fi
 echo "unexpected gh args: $*" >&2
 exit 1
 "#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="list" (
+  echo [{"number":345,"baseRefName":"main","url":"https://github.com/oneirosoft/dagger/pull/345"}]
+  exit /b 0
+)
+echo unexpected gh args: %* 1>&2
+exit /b 1
+"#,
         );
 
         let output = dgr_ok_with_env(
@@ -303,6 +382,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
@@ -333,7 +413,7 @@ fn pr_is_idempotent_when_branch_already_tracks_pull_request() {
         dgr_ok(repo, &["init"]);
         dgr_ok(repo, &["branch", "feat/auth"]);
 
-        let (bin_dir, path, log_path) = install_fake_gh(
+        let (bin_dir, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -348,6 +428,18 @@ if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
 fi
 exit 1
 "#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="list" (
+  echo []
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="create" (
+  echo https://github.com/oneirosoft/dagger/pull/456
+  exit /b 0
+)
+exit /b 1
+"#,
         );
 
         dgr_ok_with_env(
@@ -356,18 +448,18 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
 
         install_fake_executable(
             &bin_dir,
             "gh",
-            r#"#!/bin/sh
-set -eu
-printf '%s\n' "$*" >> "$DGR_TEST_GH_LOG"
-echo "gh should not have been called" >&2
-exit 99
-"#,
+            if cfg!(windows) {
+                "@echo off\r\necho %* >> \"%DGR_TEST_GH_LOG%\"\r\necho gh should not have been called 1>&2\r\nexit /b 99\r\n"
+            } else {
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$DGR_TEST_GH_LOG\"\necho \"gh should not have been called\" >&2\nexit 99\n"
+            },
         );
 
         let output = dgr_ok_with_env(
@@ -376,6 +468,7 @@ exit 99
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
@@ -394,7 +487,7 @@ fn pr_with_view_only_opens_tracked_pull_request_in_browser() {
         dgr_ok(repo, &["init"]);
         dgr_ok(repo, &["branch", "feat/auth"]);
 
-        let (bin_dir, path, log_path) = install_fake_gh(
+        let (bin_dir, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -409,6 +502,18 @@ if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
 fi
 exit 1
 "#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="list" (
+  echo []
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="create" (
+  echo https://github.com/oneirosoft/dagger/pull/456
+  exit /b 0
+)
+exit /b 1
+"#,
         );
 
         dgr_ok_with_env(
@@ -417,6 +522,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
 
@@ -424,15 +530,11 @@ exit 1
         install_fake_executable(
             &bin_dir,
             "gh",
-            r#"#!/bin/sh
-set -eu
-printf '%s\n' "$*" >> "$DGR_TEST_GH_LOG"
-if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$3" = "456" ] && [ "$4" = "--web" ]; then
-  exit 0
-fi
-echo "unexpected gh args: $*" >&2
-exit 1
-"#,
+            if cfg!(windows) {
+                "@echo off\r\necho %* >> \"%DGR_TEST_GH_LOG%\"\r\nif \"%1\"==\"pr\" if \"%2\"==\"view\" if \"%3\"==\"456\" if \"%4\"==\"--web\" (\r\n  exit /b 0\r\n)\r\necho unexpected gh args: %* 1>&2\r\nexit /b 1\r\n"
+            } else {
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$DGR_TEST_GH_LOG\"\nif [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ] && [ \"$3\" = \"456\" ] && [ \"$4\" = \"--web\" ]; then\n  exit 0\nfi\necho \"unexpected gh args: $*\" >&2\nexit 1\n"
+            },
         );
 
         let output = dgr_ok_with_env(
@@ -441,6 +543,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
 
@@ -457,7 +560,7 @@ fn pr_with_create_and_view_opens_browser_after_tracking() {
         dgr_ok(repo, &["init"]);
         dgr_ok(repo, &["branch", "feat/auth"]);
 
-        let (_, path, log_path) = install_fake_gh(
+        let (_, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -476,6 +579,22 @@ fi
 echo "unexpected gh args: $*" >&2
 exit 1
 "#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="list" (
+  echo []
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="create" (
+  echo https://github.com/oneirosoft/dagger/pull/123
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="view" if "%3"=="123" if "%4"=="--web" (
+  exit /b 0
+)
+echo unexpected gh args: %* 1>&2
+exit /b 1
+"#,
         );
 
         let output = dgr_ok_with_env(
@@ -484,6 +603,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
@@ -517,7 +637,7 @@ fn pr_prompts_to_push_branch_before_creating_pull_request() {
         dgr_ok(repo, &["init"]);
         dgr_ok(repo, &["branch", "feat/auth"]);
 
-        let (_, path, log_path) = install_fake_gh(
+        let (_, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -533,6 +653,19 @@ fi
 echo "unexpected gh args: $*" >&2
 exit 1
 "#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="list" (
+  echo []
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="create" (
+  echo https://github.com/oneirosoft/dagger/pull/777
+  exit /b 0
+)
+echo unexpected gh args: %* 1>&2
+exit /b 1
+"#,
         );
 
         let output = dgr_with_input_and_env(
@@ -542,6 +675,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
         assert!(output.status.success());
@@ -582,7 +716,7 @@ fn pr_declining_push_skips_pull_request_creation() {
         dgr_ok(repo, &["init"]);
         dgr_ok(repo, &["branch", "feat/auth"]);
 
-        let (_, path, log_path) = install_fake_gh(
+        let (_, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -594,6 +728,15 @@ fi
 echo "unexpected gh args: $*" >&2
 exit 1
 "#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="list" (
+  echo []
+  exit /b 0
+)
+echo unexpected gh args: %* 1>&2
+exit /b 1
+"#,
         );
 
         let output = dgr_with_input_and_env(
@@ -603,6 +746,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
         assert!(output.status.success());
@@ -635,7 +779,7 @@ fn pr_list_renders_open_tracked_pull_requests_in_lineage_order() {
         initialize_main_repo(repo);
         dgr_ok(repo, &["init"]);
 
-        let (bin_dir, path, log_path) = install_fake_gh(
+        let (bin_dir, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -658,6 +802,26 @@ fi
 echo "unexpected gh args: $*" >&2
 exit 1
 "#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="list" (
+  echo []
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="create" (
+  for /f "delims=" %%b in ('git branch --show-current') do set "CURRENT_BRANCH=%%b"
+  if "%CURRENT_BRANCH%"=="feat/auth" (
+    echo https://github.com/oneirosoft/dagger/pull/101
+    exit /b 0
+  )
+  if "%CURRENT_BRANCH%"=="feat/auth-ui" (
+    echo https://github.com/oneirosoft/dagger/pull/102
+    exit /b 0
+  )
+)
+echo unexpected gh args: %* 1>&2
+exit /b 1
+"#,
         );
 
         dgr_ok(repo, &["branch", "feat/auth"]);
@@ -667,6 +831,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
         dgr_ok(repo, &["branch", "feat/auth-ui"]);
@@ -676,6 +841,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
 
@@ -683,16 +849,11 @@ exit 1
         install_fake_executable(
             &bin_dir,
             "gh",
-            r#"#!/bin/sh
-set -eu
-printf '%s\n' "$*" >> "$DGR_TEST_GH_LOG"
-if [ "$1" = "pr" ] && [ "$2" = "list" ] && [ "$3" = "--state" ] && [ "$4" = "open" ]; then
-  printf '[{"number":101,"title":"Auth PR","url":"https://github.com/oneirosoft/dagger/pull/101"},{"number":102,"title":"Auth UI PR","url":"https://github.com/oneirosoft/dagger/pull/102"},{"number":999,"title":"External PR","url":"https://github.com/oneirosoft/dagger/pull/999"}]\n'
-  exit 0
-fi
-echo "unexpected gh args: $*" >&2
-exit 1
-"#,
+            if cfg!(windows) {
+                "@echo off\r\necho %* >> \"%DGR_TEST_GH_LOG%\"\r\nif \"%1\"==\"pr\" if \"%2\"==\"list\" if \"%3\"==\"--state\" if \"%4\"==\"open\" (\r\n  echo [{\"number\":101,\"title\":\"Auth PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/101\"},{\"number\":102,\"title\":\"Auth UI PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/102\"},{\"number\":999,\"title\":\"External PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/999\"}]\r\n  exit /b 0\r\n)\r\necho unexpected gh args: %* 1>&2\r\nexit /b 1\r\n"
+            } else {
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$DGR_TEST_GH_LOG\"\nif [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ] && [ \"$3\" = \"--state\" ] && [ \"$4\" = \"open\" ]; then\n  printf '[{\"number\":101,\"title\":\"Auth PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/101\"},{\"number\":102,\"title\":\"Auth UI PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/102\"},{\"number\":999,\"title\":\"External PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/999\"}]\\n'\n  exit 0\nfi\necho \"unexpected gh args: $*\" >&2\nexit 1\n"
+            },
         );
 
         let output = dgr_ok_with_env(
@@ -701,6 +862,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
@@ -721,7 +883,7 @@ fn pr_list_with_view_opens_each_listed_pull_request() {
         dgr_ok(repo, &["init"]);
         dgr_ok(repo, &["branch", "feat/auth"]);
 
-        let (bin_dir, path, log_path) = install_fake_gh(
+        let (bin_dir, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -736,6 +898,18 @@ if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
 fi
 exit 1
 "#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="list" (
+  echo []
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="create" (
+  echo https://github.com/oneirosoft/dagger/pull/301
+  exit /b 0
+)
+exit /b 1
+"#,
         );
 
         dgr_ok_with_env(
@@ -744,34 +918,18 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
         dgr_ok(repo, &["branch", "feat/auth-ui"]);
         install_fake_executable(
             &bin_dir,
             "gh",
-            r#"#!/bin/sh
-set -eu
-printf '%s\n' "$*" >> "$DGR_TEST_GH_LOG"
-if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
-  current_branch="$(git branch --show-current)"
-  if [ "$current_branch" = "feat/auth-ui" ] && [ "$3" = "--head" ]; then
-    printf '[]\n'
-    exit 0
-  fi
-  printf '[{"number":301,"title":"Auth PR","url":"https://github.com/oneirosoft/dagger/pull/301"},{"number":302,"title":"Auth UI PR","url":"https://github.com/oneirosoft/dagger/pull/302"}]\n'
-  exit 0
-fi
-if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
-  printf 'https://github.com/oneirosoft/dagger/pull/302\n'
-  exit 0
-fi
-if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$4" = "--web" ]; then
-  exit 0
-fi
-echo "unexpected gh args: $*" >&2
-exit 1
-"#,
+            if cfg!(windows) {
+                "@echo off\r\necho %* >> \"%DGR_TEST_GH_LOG%\"\r\nif \"%1\"==\"pr\" if \"%2\"==\"list\" (\r\n  for /f \"delims=\" %%b in ('git branch --show-current') do set \"CURRENT_BRANCH=%%b\"\r\n  if \"%CURRENT_BRANCH%\"==\"feat/auth-ui\" if \"%3\"==\"--head\" (\r\n    echo []\r\n    exit /b 0\r\n  )\r\n  echo [{\"number\":301,\"title\":\"Auth PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/301\"},{\"number\":302,\"title\":\"Auth UI PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/302\"}]\r\n  exit /b 0\r\n)\r\nif \"%1\"==\"pr\" if \"%2\"==\"create\" (\r\n  echo https://github.com/oneirosoft/dagger/pull/302\r\n  exit /b 0\r\n)\r\nif \"%1\"==\"pr\" if \"%2\"==\"view\" if \"%4\"==\"--web\" (\r\n  exit /b 0\r\n)\r\necho unexpected gh args: %* 1>&2\r\nexit /b 1\r\n"
+            } else {
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$DGR_TEST_GH_LOG\"\nif [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then\n  current_branch=\"$(git branch --show-current)\"\n  if [ \"$current_branch\" = \"feat/auth-ui\" ] && [ \"$3\" = \"--head\" ]; then\n    printf '[]\\n'\n    exit 0\n  fi\n  printf '[{\"number\":301,\"title\":\"Auth PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/301\"},{\"number\":302,\"title\":\"Auth UI PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/302\"}]\\n'\n  exit 0\nfi\nif [ \"$1\" = \"pr\" ] && [ \"$2\" = \"create\" ]; then\n  printf 'https://github.com/oneirosoft/dagger/pull/302\\n'\n  exit 0\nfi\nif [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ] && [ \"$4\" = \"--web\" ]; then\n  exit 0\nfi\necho \"unexpected gh args: $*\" >&2\nexit 1\n"
+            },
         );
         dgr_ok_with_env(
             repo,
@@ -779,6 +937,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
 
@@ -786,19 +945,11 @@ exit 1
         install_fake_executable(
             &bin_dir,
             "gh",
-            r#"#!/bin/sh
-set -eu
-printf '%s\n' "$*" >> "$DGR_TEST_GH_LOG"
-if [ "$1" = "pr" ] && [ "$2" = "list" ] && [ "$3" = "--state" ] && [ "$4" = "open" ]; then
-  printf '[{"number":301,"title":"Auth PR","url":"https://github.com/oneirosoft/dagger/pull/301"},{"number":302,"title":"Auth UI PR","url":"https://github.com/oneirosoft/dagger/pull/302"}]\n'
-  exit 0
-fi
-if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$4" = "--web" ]; then
-  exit 0
-fi
-echo "unexpected gh args: $*" >&2
-exit 1
-"#,
+            if cfg!(windows) {
+                "@echo off\r\necho %* >> \"%DGR_TEST_GH_LOG%\"\r\nif \"%1\"==\"pr\" if \"%2\"==\"list\" if \"%3\"==\"--state\" if \"%4\"==\"open\" (\r\n  echo [{\"number\":301,\"title\":\"Auth PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/301\"},{\"number\":302,\"title\":\"Auth UI PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/302\"}]\r\n  exit /b 0\r\n)\r\nif \"%1\"==\"pr\" if \"%2\"==\"view\" if \"%4\"==\"--web\" (\r\n  exit /b 0\r\n)\r\necho unexpected gh args: %* 1>&2\r\nexit /b 1\r\n"
+            } else {
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$DGR_TEST_GH_LOG\"\nif [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ] && [ \"$3\" = \"--state\" ] && [ \"$4\" = \"open\" ]; then\n  printf '[{\"number\":301,\"title\":\"Auth PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/301\"},{\"number\":302,\"title\":\"Auth UI PR\",\"url\":\"https://github.com/oneirosoft/dagger/pull/302\"}]\\n'\n  exit 0\nfi\nif [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ] && [ \"$4\" = \"--web\" ]; then\n  exit 0\nfi\necho \"unexpected gh args: $*\" >&2\nexit 1\n"
+            },
         );
 
         dgr_ok_with_env(
@@ -807,6 +958,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
 
@@ -831,7 +983,7 @@ fn pr_rejects_existing_open_pull_request_with_wrong_base() {
         dgr_ok(repo, &["init"]);
         dgr_ok(repo, &["branch", "feat/auth"]);
 
-        let (_, path, log_path) = install_fake_gh(
+        let (_, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -842,6 +994,14 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
 fi
 exit 1
 "#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="list" (
+  echo [{"number":567,"baseRefName":"develop","url":"https://github.com/oneirosoft/dagger/pull/567"}]
+  exit /b 0
+)
+exit /b 1
+"#,
         );
 
         let output = support::dgr_with_env(
@@ -850,6 +1010,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
 
@@ -875,7 +1036,11 @@ fn pr_reports_missing_gh_cli() {
         install_fake_executable(
             &bin_dir,
             "git",
-            &format!("#!/bin/sh\nset -eu\nexec \"{}\" \"$@\"\n", git_path),
+            &if cfg!(windows) {
+                format!("@echo off\r\n\"{}\" %*\r\n", git_path)
+            } else {
+                format!("#!/bin/sh\nset -eu\nexec \"{}\" \"$@\"\n", git_path)
+            },
         );
         let path = bin_dir.display().to_string();
 
@@ -894,7 +1059,7 @@ fn pr_hides_gh_usage_output_when_create_fails() {
         dgr_ok(repo, &["init"]);
         dgr_ok(repo, &["branch", "feat/auth"]);
 
-        let (_, path, log_path) = install_fake_gh(
+        let (_, path, log_path, gh_bin) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -917,6 +1082,24 @@ fi
 echo "unexpected gh args: $*" >&2
 exit 1
 "#,
+            r#"@echo off
+echo %* >> "%DGR_TEST_GH_LOG%"
+if "%1"=="pr" if "%2"=="list" (
+  echo []
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="create" (
+  echo must provide `--title` and `--body` ^(or `--fill`^) 1>&2
+  echo. 1>&2
+  echo Usage:  gh pr create [flags] 1>&2
+  echo. 1>&2
+  echo Flags: 1>&2
+  echo   -b, --body string 1>&2
+  exit /b 1
+)
+echo unexpected gh args: %* 1>&2
+exit /b 1
+"#,
         );
 
         let output = support::dgr_with_env(
@@ -925,6 +1108,7 @@ exit 1
             &[
                 ("PATH", path.as_str()),
                 ("DGR_TEST_GH_LOG", log_path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.as_str()),
             ],
         );
 
