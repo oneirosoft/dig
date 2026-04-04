@@ -7,8 +7,13 @@ use support::{
     load_state_json, path_with_prepend, strip_ansi, with_temp_repo,
 };
 
-fn install_fake_gh(repo: &Path, script: &str) -> (PathBuf, String) {
+fn install_fake_gh(repo: &Path, unix_script: &str, windows_script: &str) -> (PathBuf, String) {
     let bin_dir = repo.join("fake-bin");
+    let script = if cfg!(windows) {
+        windows_script
+    } else {
+        unix_script
+    };
     install_fake_executable(&bin_dir, "gh", script);
 
     let path = path_with_prepend(&bin_dir);
@@ -58,7 +63,7 @@ fn init_lineage_shows_tracked_pull_request_numbers() {
         dgr_ok(repo, &["init"]);
         dgr_ok(repo, &["branch", "feat/auth"]);
 
-        let (_, path) = install_fake_gh(
+        let (bin_dir, path) = install_fake_gh(
             repo,
             r#"#!/bin/sh
 set -eu
@@ -73,9 +78,29 @@ fi
 echo "unexpected gh args: $*" >&2
 exit 1
 "#,
+            r#"@echo off
+if "%1"=="pr" if "%2"=="list" (
+  echo []
+  exit /b 0
+)
+if "%1"=="pr" if "%2"=="create" (
+  echo https://github.com/oneirosoft/dagger/pull/123
+  exit /b 0
+)
+echo unexpected gh args: %* 1>&2
+exit /b 1
+"#,
         );
 
-        dgr_ok_with_env(repo, &["pr"], &[("PATH", path.as_str())]);
+        let gh_bin = bin_dir.join(if cfg!(windows) { "gh.cmd" } else { "gh" });
+        dgr_ok_with_env(
+            repo,
+            &["pr"],
+            &[
+                ("PATH", path.as_str()),
+                ("DAGGER_GH_BIN", gh_bin.to_str().unwrap()),
+            ],
+        );
 
         let output = dgr_ok(repo, &["init"]);
         let stdout = strip_ansi(&String::from_utf8(output.stdout).unwrap());
