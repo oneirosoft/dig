@@ -3,6 +3,7 @@ use std::process::{Command, ExitStatus};
 
 use crate::core::git::{self, RepoContext};
 use crate::core::restack::{self, RestackPreview};
+use crate::core::store::lock::StoreLock;
 use crate::core::store::{
     BranchDivergenceState, PendingCommitEntry, PendingCommitOperation, PendingOperationKind,
     PendingOperationState, StoreSession, dagger_paths, load_config, load_state, open_initialized,
@@ -299,6 +300,7 @@ fn maybe_restack_after_commit_inner(
         return Ok(PostCommitRestackOutcome::default());
     }
 
+    let lock = StoreLock::acquire(&store_paths.root)?;
     let state = load_state(&store_paths)?;
     let Some(node) = state.find_branch_by_name(current_branch).cloned() else {
         return Ok(PostCommitRestackOutcome::default());
@@ -306,12 +308,7 @@ fn maybe_restack_after_commit_inner(
 
     let actions =
         restack::plan_after_branch_advance(&state, node.id, &node.branch_name, old_head_oid)?;
-    let mut session = StoreSession {
-        repo: context.repo.clone(),
-        paths: store_paths,
-        config,
-        state,
-    };
+    let mut session = StoreSession::from_lock(context.repo.clone(), store_paths, config, state, lock);
     record_branch_divergence_state(&mut session, node.id, BranchDivergenceState::Diverged)?;
     let restack_outcome = match workflow::execute_resumable_restack_operation(
         &mut session,
