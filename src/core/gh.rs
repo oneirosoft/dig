@@ -1,7 +1,7 @@
 use std::io;
 use std::io::{Read, Write};
 use std::process::{Command, ExitStatus, Output, Stdio};
-use std::thread;
+use std::{env, thread};
 
 use serde::Deserialize;
 
@@ -352,8 +352,17 @@ fn pull_request_number_from_url(url: &str) -> Option<u64> {
     (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
 }
 
+/// Returns the program name used to invoke the GitHub CLI.
+///
+/// Defaults to `"gh"` but can be overridden via the `DAGGER_GH_BIN` environment
+/// variable, which is useful for testing on platforms where `Command::new("gh")`
+/// does not resolve non-`.exe` scripts (e.g. `.cmd` wrappers on Windows).
+fn gh_program() -> String {
+    env::var("DAGGER_GH_BIN").unwrap_or_else(|_| "gh".to_string())
+}
+
 fn run_gh_capture_output(args: &[String]) -> io::Result<GhCommandOutput> {
-    let output = Command::new("gh")
+    let output = Command::new(gh_program())
         .args(args)
         .output()
         .map_err(normalize_gh_spawn_error)?;
@@ -375,7 +384,7 @@ fn run_gh_command(command_name: &str, args: &[String]) -> io::Result<()> {
 }
 
 fn run_gh_with_live_output(args: &[String]) -> io::Result<GhCommandOutput> {
-    let mut child = Command::new("gh")
+    let mut child = Command::new(gh_program())
         .args(args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())

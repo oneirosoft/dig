@@ -161,30 +161,46 @@ pub fn git_stdout(repo: &Path, args: &[&str]) -> String {
 
 pub fn install_fake_executable(bin_dir: &Path, name: &str, script: &str) {
     fs::create_dir_all(bin_dir).unwrap();
-    let path = bin_dir.join(name);
-    fs::write(&path, script).unwrap();
+
     #[cfg(unix)]
     {
+        let path = bin_dir.join(name);
+        fs::write(&path, script).unwrap();
         let mut permissions = fs::metadata(&path).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[cfg(windows)]
+    {
+        let path = bin_dir.join(format!("{name}.cmd"));
+        fs::write(&path, script).unwrap();
     }
 }
 
 pub fn path_with_prepend(dir: &Path) -> String {
     let existing_path = std::env::var("PATH").unwrap_or_default();
+    let separator = if cfg!(windows) { ";" } else { ":" };
     if existing_path.is_empty() {
         dir.display().to_string()
     } else {
-        format!("{}:{existing_path}", dir.display())
+        format!("{}{separator}{existing_path}", dir.display())
     }
 }
 
 pub fn git_binary_path() -> String {
-    let output = Command::new("which").arg("git").output().unwrap();
-    assert!(output.status.success(), "which git failed");
+    let cmd = if cfg!(windows) { "where" } else { "which" };
+    let output = Command::new(cmd).arg("git").output().unwrap();
+    assert!(output.status.success(), "{cmd} git failed");
 
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
+    // `where` on Windows may return multiple lines; take the first.
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .trim()
+        .to_string()
 }
 
 pub fn load_state_json(repo: &Path) -> Value {

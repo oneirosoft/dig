@@ -136,7 +136,35 @@ mod tests {
     use crate::core::commit::{CommitEntry, CommitOptions, CommitOutcome};
     use crate::core::restack::RestackPreview;
     use clap::FromArgMatches;
-    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    /// Create an `ExitStatus` representing a successful (code 0) process.
+    fn exit_status_success() -> ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            ExitStatus::from_raw(0)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            ExitStatus::from_raw(0)
+        }
+    }
+
+    /// Create an `ExitStatus` representing a failed (non-zero) process.
+    fn exit_status_failure() -> ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            ExitStatus::from_raw(1 << 8) // encodes exit code 1
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            ExitStatus::from_raw(1)
+        }
+    }
 
     #[test]
     fn converts_cli_args_into_core_commit_options() {
@@ -197,7 +225,7 @@ mod tests {
     #[test]
     fn formats_commit_output_with_summary_and_blank_line_before_log() {
         let outcome = CommitOutcome {
-            status: std::process::ExitStatus::from_raw(0),
+            status: exit_status_success(),
             commit_succeeded: true,
             summary_line: Some("10 files changed, 2245 insertions(+)".into()),
             recent_commits: vec![CommitEntry {
@@ -220,7 +248,7 @@ mod tests {
     #[test]
     fn formats_commit_output_with_restack_section() {
         let outcome = CommitOutcome {
-            status: std::process::ExitStatus::from_raw(1 << 8),
+            status: exit_status_failure(),
             commit_succeeded: true,
             summary_line: Some("1 file changed, 1 insertion(+)".into()),
             recent_commits: vec![CommitEntry {

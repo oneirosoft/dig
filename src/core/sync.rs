@@ -1579,13 +1579,19 @@ mod tests {
 
     fn install_fake_executable(bin_dir: &Path, name: &str, script: &str) {
         fs::create_dir_all(bin_dir).unwrap();
-        let path = bin_dir.join(name);
-        fs::write(&path, script).unwrap();
         #[cfg(unix)]
         {
+            let path = bin_dir.join(name);
+            fs::write(&path, script).unwrap();
             let mut permissions = fs::metadata(&path).unwrap().permissions();
             permissions.set_mode(0o755);
             fs::set_permissions(path, permissions).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            // On Windows, Command::new("gh") finds gh.cmd in PATH
+            let path = bin_dir.join(format!("{name}.cmd"));
+            fs::write(&path, script).unwrap();
         }
     }
 
@@ -1594,7 +1600,8 @@ mod tests {
         if existing_path.is_empty() {
             dir.display().to_string()
         } else {
-            format!("{}:{existing_path}", dir.display())
+            let sep = if cfg!(windows) { ";" } else { ":" };
+            format!("{}{sep}{existing_path}", dir.display())
         }
     }
 
@@ -1836,16 +1843,23 @@ mod tests {
 
             let bin_dir = repo.join("fake-bin");
             let log_path = repo.join("gh.log");
-            install_fake_executable(
-                &bin_dir,
-                "gh",
-                &format!(
-                    "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\n",
-                    log_path.display()
-                ),
+            #[cfg(unix)]
+            let script = format!(
+                "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"{}\"\n",
+                log_path.display()
             );
+            #[cfg(windows)]
+            let script = format!("@echo off\r\necho %* >> \"{}\"\r\n", log_path.display());
+            install_fake_executable(&bin_dir, "gh", &script);
             fs::write(&log_path, "").unwrap();
             let _path_guard = EnvVarGuard::set("PATH", path_with_prepend(&bin_dir));
+            // On Windows, Command::new("gh") only resolves gh.exe, not gh.cmd.
+            // Point DAGGER_GH_BIN at the .cmd wrapper so gh_program() uses it directly.
+            #[cfg(windows)]
+            let _gh_bin_guard = EnvVarGuard::set(
+                "DAGGER_GH_BIN",
+                bin_dir.join("gh.cmd").display().to_string(),
+            );
 
             let plan = PullRequestUpdatePlan {
                 actions: vec![
