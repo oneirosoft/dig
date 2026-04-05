@@ -1,9 +1,18 @@
+# Dependabot configuration — security-only for application ecosystems
+#
+# Application ecosystems (cargo, npm, pip, etc.) use open-pull-requests-limit: 0
+# to disable scheduled version-update PRs. Dependabot security alerts still
+# create PRs for known vulnerabilities regardless of this limit.
+#
+# GitHub Actions is the exception: we allow version updates there because
+# actions are build-time dependencies with minimal supply-chain risk.
 version: 2
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "weekly"
+    # Security-only: limit 0 disables version PRs; security alerts still open PRs
     open-pull-requests-limit: 0
     labels:
       - "security"

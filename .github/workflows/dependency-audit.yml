@@ -21,7 +21,7 @@ permissions:
 jobs:
   detect:
     name: Detect ecosystems
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       npm: ${{ steps.check.outputs.npm }}
       pnpm: ${{ steps.check.outputs.pnpm }}
@@ -74,7 +74,7 @@ jobs:
     name: npm audit
     needs: detect
     if: needs.detect.outputs.npm == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
@@ -99,7 +99,7 @@ jobs:
     name: pnpm audit
     needs: detect
     if: needs.detect.outputs.pnpm == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
@@ -127,7 +127,7 @@ jobs:
     name: govulncheck
     needs: detect
     if: needs.detect.outputs.gomod == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
@@ -154,11 +154,13 @@ jobs:
     name: cargo audit
     needs: detect
     if: needs.detect.outputs.cargo == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-audit
         run: cargo install cargo-audit@0.22.1 --locked
@@ -181,7 +183,7 @@ jobs:
     name: pip-audit
     needs: detect
     if: needs.detect.outputs.pip == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
